@@ -164,7 +164,6 @@ faire, et l'acceptent ou non.
   clé et un numéro plus grand.
 - Une nouvelle version qui demande **une nouvelle permission** devra être acceptée à nouveau par chaque motard.
 - Un module peut être **retiré** du catalogue (faille, abus) : il est alors désinstallé des téléphones.
-- Les ids `dev.dashlink.*` et les noms ou auteurs avec « DashLink » ou « officiel » sont réservés.
 
 ### Expérimental, puis validé
 

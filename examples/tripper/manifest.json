@@ -9,6 +9,7 @@
   "screen": {
     "main": "moto.js",
     "wifi": { "udp": [2000, 2002, 5000] },
-    "frames": { "maxWidth": 526, "maxHeight": 300, "maxFps": 4, "formats": ["h264"] }
+    "frames": { "maxWidth": 526, "maxHeight": 300, "maxFps": 4, "formats": ["h264"] },
+    "detect": { "wifiName": ["RE_"] }
   }
 }
