@@ -7,6 +7,8 @@
  *   node tools/dashlink.mjs replay  <dossier> <capture.txt>   rejoue une capture face à ton pilote d'écran
  *   node tools/dashlink.mjs cockpit <dossier> [--port 8090] [--taille 526x300]
  *                                                           aperçu de ton cockpit (téléphone et écran de la moto)
+ *   node tools/dashlink.mjs diff    <capture1> <capture2> [--depuis <hex>] [--paquets 40]
+ *                                                           compare la même session prise sur deux téléphones
  *
  * Le module tourne ici dans un contexte JavaScript vierge (ni réseau, ni minuteries, ni fichiers), avec les
  * mêmes événements, les mêmes actions et les mêmes règles que dans l'appli. L'appli reste la référence :
@@ -356,11 +358,12 @@ class Broker {
 // ---- rejeu d'une capture ----------------------------------------------------------------
 
 function parseCapture(text) {
-  const meta = {}, packets = [];
+  const meta = {}, packets = [], journal = [];
   for (const raw of text.split(/\r?\n/)) {
     const l = raw.trimEnd();
     if (!l) continue;
-    if (l.startsWith("#!")) continue; // journal du module (chronologie), pour les humains
+    // Journal du module (chronologie, état du téléphone) : pour les humains, et pour diff.
+    if (l.startsWith("#!")) { const m = /^#!\s*(\d+)\s(.*)$/.exec(l); if (m) journal.push({ t: Number(m[1]), text: m[2] }); continue; }
     if (l.startsWith("#")) { const m = /^#\s*([^:]+):\s*(.*)$/.exec(l); if (m) meta[m[1].trim()] = m[2]; continue; }
     const c = l.split("\t");
     const t = Number(c[0]);
@@ -368,9 +371,68 @@ function parseCapture(text) {
     const [ch, hexPart] = c.length >= 4 ? [c[2], c[3]] : [c[1] === "<" ? "rx" : "cmd", c[2] ?? ""];
     const cut = hexPart.indexOf("…"), hex = cut >= 0 ? hexPart.slice(0, cut) : hexPart;
     if (hex.length % 2 || !/^[0-9a-fA-F]*$/.test(hex)) continue;
-    packets.push({ t, incoming: c[1] === "<", channel: ch, data: cut >= 0 ? null : Buffer.from(hex, "hex") });
+    packets.push({ t, incoming: c[1] === "<", channel: ch, data: cut >= 0 ? null : Buffer.from(hex, "hex"), head: Buffer.from(hex, "hex"), size: cut >= 0 ? Number(hexPart.slice(cut + 1)) || hex.length / 2 : hex.length / 2 });
   }
-  return { meta, packets };
+  return { meta, packets, journal };
+}
+
+// ---- comparaison de deux captures ----------------------------------------------------------------
+
+const median = (a) => { if (!a.length) return NaN; const b = [...a].sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
+const pct = (a, p) => { if (!a.length) return NaN; const b = [...a].sort((x, y) => x - y); return b[Math.min(b.length - 1, Math.floor(b.length * p))]; };
+
+/**
+ * La même session prise sur deux téléphones, alignée dans le temps (début, ou premier paquet de l'écran qui
+ * commence par --depuis) : rythme de chaque liaison, trous, état du téléphone, puis les paquets qui suivent
+ * l'instant choisi, côte à côte, avec le premier écart.
+ */
+function diff(fileA, fileB, opts) {
+  const caps = [fileA, fileB].map((f) => ({ name: path.basename(f), ...parseCapture(fs.readFileSync(f, "utf8")) }));
+  const out = (l = "") => console.log(l);
+  for (const c of caps) {
+    c.t0 = opts.from ? c.packets.find((p) => p.incoming && p.head.toString("hex").startsWith(opts.from))?.t : (c.packets[0]?.t ?? 0);
+    out(`${c.name} : ${c.meta["téléphone"] ?? "téléphone inconnu"} · ${c.meta.module ?? "module ?"} · ${c.packets.length} paquets`);
+  }
+  const missing = caps.filter((c) => c.t0 === undefined);
+  if (missing.length) { out(`\n✖ aucun paquet de l'écran ne commence par ${opts.from} dans ${missing.map((c) => c.name).join(" et ")}`); return 1; }
+
+  out("\nRythme par liaison (intervalle médian, 95 %, plus grand ; trous de plus de 1,5 s)");
+  const keys = [...new Set(caps.flatMap((c) => c.packets.map((p) => `${p.incoming ? "<" : ">"} ${p.channel}`)))].sort();
+  for (const k of keys) {
+    const cols = caps.map((c) => {
+      const ts_ = c.packets.filter((p) => `${p.incoming ? "<" : ">"} ${p.channel}` === k).map((p) => p.t);
+      const iv = ts_.slice(1).map((t, i) => t - ts_[i]);
+      const holes = iv.filter((x) => x > 1500);
+      return ts_.length ? `${String(ts_.length).padStart(5)} paquets, ${median(iv) | 0}/${pct(iv, 0.95) | 0}/${Math.max(0, ...iv)} ms, ${holes.length} trous` : "      aucun";
+    });
+    out(`  ${k.padEnd(10)} ${cols[0].padEnd(46)} │ ${cols[1]}`);
+  }
+
+  const near = (c) => c.journal.filter((j) => Math.abs(j.t - c.t0) <= opts.window);
+  if (caps.some((c) => c.journal.length)) {
+    out(`\nJournal et état du téléphone (± ${opts.window / 1000} s autour de l'instant choisi)`);
+    for (const c of caps) { out(`  ${c.name}`); for (const j of near(c)) out(`    ${ts(j.t - c.t0)}  ${j.text}`); }
+  }
+
+  out(`\nPaquets à partir de ${opts.from ? `« ${opts.from}… »` : "début"} (${opts.count} au plus)`);
+  const seqs = caps.map((c) => c.packets.filter((p) => p.t >= c.t0).slice(0, opts.count));
+  const cell = (p, c) => p ? `${ts(p.t - c.t0)} ${p.incoming ? "<" : ">"} ${p.channel.padEnd(5)} ${p.head.subarray(0, 10).toString("hex")} ${p.size} o` : "";
+  // Même nature de paquet : sens, liaison, 4 premiers octets (le reste varie : compteurs, horodatages).
+  const shape = (p) => p && `${p.incoming}|${p.channel}|${p.head.subarray(0, 4).toString("hex")}`;
+  let first = -1;
+  for (let i = 0; i < Math.max(seqs[0].length, seqs[1].length); i++) {
+    const [a, b] = [seqs[0][i], seqs[1][i]];
+    const differs = shape(a) !== shape(b);
+    if (differs && first < 0) first = i;
+    out(`${differs ? "≠" : " "} ${cell(a, caps[0]).padEnd(50)} │ ${cell(b, caps[1])}`);
+  }
+  out(first < 0 ? "\nMêmes paquets dans le même ordre." : `\nPremier écart : paquet ${first + 1} après l'instant choisi.`);
+  // Ce que le cas « délai expiré » demande : le téléphone a-t-il répondu, et en combien de temps ?
+  for (const [i, c] of caps.entries()) {
+    const reply = seqs[i].find((p) => !p.incoming);
+    out(`  ${c.name} : ${reply ? `premier envoi du téléphone ${reply.t - c.t0} ms après` : "le téléphone n'envoie rien ensuite"}`);
+  }
+  return 0;
 }
 
 const hexOf = (b, max = 48) => b.subarray(0, max).toString("hex") + (b.length > max ? `… (${b.length} o)` : "");
@@ -579,7 +641,7 @@ button{margin:8px 6px 0 0;padding:6px 10px;border-radius:8px;border:1px solid #4
 // ---- ligne de commande -----------------------------------------------------------------------
 
 const [cmd, dir, ...rest] = process.argv.slice(2);
-const usage = () => { console.log(fs.readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(2, 13).map((l) => l.replace(/^ \* ?/, "")).join("\n")); process.exit(2); };
+const usage = () => { console.log(fs.readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(2, 15).map((l) => l.replace(/^ \* ?/, "")).join("\n")); process.exit(2); };
 if (!cmd || !dir) usage();
 try {
   if (cmd === "check") {
@@ -598,6 +660,11 @@ try {
   } else if (cmd === "replay") {
     if (!rest[0]) usage();
     process.exitCode = replay(dir, rest[0], { quiet: rest.includes("--quiet"), full: rest.includes("--full") });
+  } else if (cmd === "diff") {
+    if (!rest[0]) usage();
+    const opt = (k, d) => { const i = rest.indexOf(k); return i >= 0 ? rest[i + 1] : d; };
+    const from = opt("--depuis", "")?.toLowerCase().replace(/[^0-9a-f]/g, "");
+    process.exitCode = diff(dir, rest[0], { from, count: Number(opt("--paquets", 40)), window: 30_000 });
   } else if (cmd === "cockpit") {
     const i = rest.indexOf("--port"), t = rest.indexOf("--taille");
     const [w, h] = (t >= 0 ? rest[t + 1] : "526x300").split("x").map(Number);

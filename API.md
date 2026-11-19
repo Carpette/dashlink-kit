@@ -29,6 +29,7 @@ Types exacts : [types/dashlink.d.ts](types/dashlink.d.ts). Guide pas à pas : [R
 | `version` | `x.y.z`, toujours plus grande d'une publication à l'autre |
 | `name`, `author` | 40 et 60 caractères au plus |
 | `screen` | Pilote d'écran : script `main`, et au moins une liaison déclarée (8 ports au plus par type) |
+| `screen.wifi` | `udp`, `tcp` : ports ; `lowLatency`, `multicast` (vrais par défaut) : à `false`, DashLink lâche le Wi-Fi faible latence ou le verrou multicast pendant que ton module tourne, pour essayer |
 | `screen.bluetooth` | `rfcomm` : UUID des services (8 au plus) ; `channels` : canaux RFCOMM ouverts par numéro, 1 à 30 (8 au plus) |
 | `screen.frames` | Images du guidage : 16 à 1920 pixels de côté, 1 à 30 images/s, formats `h264`, `rgba`, `jpeg` |
 | `cockpit` | Cockpit : `main` (HTML du téléphone, sans script), `script` (logique, facultatif), `bike` (HTML pour l'écran de la moto, facultatif) |
@@ -180,6 +181,32 @@ sur toute moto dont l'écran affiche une image (pilote d'écran qui demande des 
 - Mêmes règles que sur le téléphone : HTML filtré, aucun script, aucune adresse extérieure.
 
 Aperçu : `node tools/dashlink.mjs cockpit <dossier> --taille 526x300` montre le téléphone et la moto côte à côte.
+
+## Wi-Fi : comprendre pourquoi un téléphone marche et pas l'autre
+
+Pendant que ton module tourne, DashLink note au journal du module, daté :
+- **la liaison** : jonction au Wi-Fi de l'écran, adresse, passerelle, changements d'adresses, réseau bloqué,
+  sur le point d'être perdu, ou perdu ;
+- **l'état du téléphone**, relevé toutes les 5 s et noté quand il change :
+  - lien Wi-Fi : signal, fréquence, débits, norme ;
+  - écran allumé ou éteint, Doze, économiseur de batterie, optimisation de la batterie ;
+  - réseau par défaut ;
+- **les trous de réception** : plus de 1,5 s sans rien d'un écran qui parlait régulièrement.
+
+Tout part avec la capture exportée (lignes `#!`), avec le modèle du téléphone et sa version d'Android.
+
+Prends la même session sur deux téléphones, puis compare :
+
+```
+node tools/dashlink.mjs diff pixel3.txt pixel7.txt --depuis 0030
+```
+
+La comparaison s'aligne sur le premier paquet de l'écran qui commence par ces octets, par exemple la demande
+qui suit « Navigation ». Elle montre :
+- le rythme de chaque liaison ;
+- l'état des deux téléphones à ce moment ;
+- les paquets qui suivent, côte à côte, avec le premier écart ;
+- si le téléphone a répondu, et en combien de temps.
 
 ## Bluetooth : mener la connexion
 

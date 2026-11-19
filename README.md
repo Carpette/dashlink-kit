@@ -101,6 +101,11 @@ cp -r templates/ecran ../mon-ecran
 
 Pour avancer sans rouler, travaille avec des **captures** (section 4) et `replay`.
 
+**Marche sur un téléphone et pas sur l'autre ?** Prends la même session sur les deux (Atelier › Exporter la
+capture) : le journal de la liaison et l'état du téléphone y sont. Ensuite,
+`node tools/dashlink.mjs diff a.txt b.txt --depuis <octets>` les aligne et montre le premier écart
+([API.md](API.md#wi-fi--comprendre-pourquoi-un-téléphone-marche-et-pas-lautre)).
+
 **Écran en Bluetooth qui refuse la connexion ?** C'est à ton module de mener la connexion, et DashLink te dit
 tout :
 - l'événement `closed` donne l'étape et l'erreur exacte d'Android ;
