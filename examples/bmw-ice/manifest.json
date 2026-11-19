@@ -1,0 +1,13 @@
+{
+  "api": 1,
+  "id": "dev.dashlink.bmw-ice",
+  "name": "BMW TFT (inachevé)",
+  "version": "0.1.0",
+  "author": "DashLink",
+  "description": "Tableau de bord TFT BMW Motorrad : consignes de guidage (flèche, distance, rue, limitation) en ZeroC Ice sur Bluetooth. Exemple INACHEVÉ : jamais connecté à une vraie moto. À reprendre par qui a une BMW.",
+  "permissions": ["ride", "guidance"],
+  "screen": {
+    "main": "moto.js",
+    "bluetooth": { "rfcomm": ["c707050e-efae-1449-3913-c191e5bb32dc"] }
+  }
+}

@@ -55,7 +55,17 @@ interface RefusedEvent { type: "refused"; reasons: string[] }
 interface StopEvent { type: "stop" }
 // Pilote d'écran
 interface OpenedEvent { type: "opened"; channel: string }
-interface ClosedEvent { type: "closed"; channel: string; error?: string }
+interface ClosedEvent {
+  type: "closed"; channel: string; error?: string;
+  /** Exception d'Android, telle quelle. */ errorClass?: string; cause?: string;
+  step?: "connect" | "accept" | "read" | "write"; ms?: number; bond?: Bond;
+}
+type Bond = "none" | "bonding" | "bonded";
+interface BondEvent { type: "bond"; state: Bond; previous: Bond; reason?: number; error?: string }
+interface DeviceEvent {
+  type: "device"; address: string; name?: string | null; bond?: Bond; deviceType?: "classic" | "le" | "dual" | "unknown";
+  majorClass?: number; deviceClass?: number; uuids?: string[]; sdp?: boolean; adapterOn?: boolean; error?: string;
+}
 interface RecvEvent { type: "recv"; channel: string; host?: string; port?: number; data: Uint8Array }
 /** Image encodée par DashLink (après une action « frames »). H.264 : Annex B, SPS et PPS devant chaque image clé. */
 interface FrameEvent { type: "frame"; format: "h264" | "rgba" | "jpeg"; width: number; height: number; key: boolean; pts: number; data: Uint8Array }
@@ -66,7 +76,7 @@ interface DisplayEvent { type: "display"; phone: boolean; bike: { width: number;
 /** Bouton du guidon. */
 interface ButtonEvent { type: "button"; command: JoystickCommand }
 
-type DashLinkEvent = StartEvent | RideEvent | TimerEvent | RefusedEvent | StopEvent | OpenedEvent | ClosedEvent | RecvEvent | FrameEvent | TapEvent | DisplayEvent | ButtonEvent;
+type DashLinkEvent = StartEvent | RideEvent | TimerEvent | RefusedEvent | StopEvent | OpenedEvent | ClosedEvent | RecvEvent | FrameEvent | TapEvent | DisplayEvent | ButtonEvent | BondEvent | DeviceEvent;
 type Permission = "ride" | "guidance" | "position" | "voice" | "report" | "group" | "hazards" | "weather" | "stops" | "terrain" | "trip" | "media" | "contest" | "bikeData";
 
 // ---- actions renvoyées -------------------------------------------------------------------------
@@ -80,7 +90,10 @@ type DashLinkAction =
   // pilote d'écran
   | { type: "open"; channel: string; kind: "udp"; localPort?: number; broadcast?: boolean }
   | { type: "open"; channel: string; kind: "tcp"; host: string; port: number }
-  | { type: "open"; channel: string; kind: "rfcomm"; uuid: string }
+  | { type: "open"; channel: string; kind: "rfcomm"; uuid: string; secure?: boolean; server?: boolean }
+  | { type: "open"; channel: string; kind: "rfcomm"; rfcommChannel: number; secure?: boolean }
+  | { type: "pair" }
+  | { type: "inspect"; sdp?: boolean }
   | { type: "send"; channel: string; data: Uint8Array; host?: string; port?: number }   // host et port : UDP seulement
   | { type: "close"; channel: string }
   | { type: "frames"; width: number; height: number; fps: number; format: "h264" | "rgba" | "jpeg" } | { type: "frames"; stop: true }

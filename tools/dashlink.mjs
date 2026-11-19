@@ -94,7 +94,8 @@ function manifestOf(files) {
     const s = o.screen;
     file(s.main, ".js", "screen.main");
     screen = { main: s.main, udp: ports(s.wifi?.udp, "screen.wifi.udp"), tcp: ports(s.wifi?.tcp, "screen.wifi.tcp"),
-      rfcomm: new Set((s.bluetooth?.rfcomm ?? []).map((u) => String(u).toLowerCase())), frames: null };
+      rfcomm: new Set((s.bluetooth?.rfcomm ?? []).map((u) => String(u).toLowerCase())), channels: new Set(s.bluetooth?.channels ?? []), frames: null };
+    if (screen.channels.size > 8 || ![...screen.channels].every((c) => Number.isInteger(c) && c >= 1 && c <= 30)) fail("« screen.bluetooth.channels » : 8 canaux au plus, de 1 à 30");
     if (s.frames) {
       const f = s.frames;
       if (!(f.maxWidth >= 16 && f.maxWidth <= 1920 && f.maxHeight >= 16 && f.maxHeight <= 1920)) fail("« frames » : maxWidth et maxHeight entre 16 et 1920");
@@ -102,7 +103,7 @@ function manifestOf(files) {
       if (!Array.isArray(f.formats) || !f.formats.length || !f.formats.every((x) => FORMATS.includes(x))) fail(`« frames.formats » : parmi ${FORMATS.join(", ")}`);
       screen.frames = f;
     }
-    if (!screen.udp.size && !screen.tcp.size && !screen.rfcomm.size) fail("« screen » : déclare au moins une liaison (wifi.udp, wifi.tcp ou bluetooth.rfcomm)");
+    if (!screen.udp.size && !screen.tcp.size && !screen.rfcomm.size && !screen.channels.size) fail("« screen » : déclare au moins une liaison (wifi.udp, wifi.tcp, bluetooth.rfcomm ou bluetooth.channels)");
   }
   if (o.cockpit) {
     file(o.cockpit.main, ".html", "cockpit.main");
@@ -117,7 +118,7 @@ function manifestOf(files) {
 function consentLines(m) {
   const out = m.permissions.map((p) => "Voir ou faire : " + PERMS[p]);
   if (m.screen?.udp.size || m.screen?.tcp.size) out.push("Parler à l'écran Wi-Fi de ta moto (seulement le réseau que tu choisiras, jamais internet)");
-  if (m.screen?.rfcomm.size) out.push("Parler à l'écran Bluetooth de ta moto (seulement l'appareil que tu choisiras)");
+  if (m.screen?.rfcomm.size || m.screen?.channels.size) out.push("Parler à l'écran Bluetooth de ta moto (seulement l'appareil que tu choisiras)");
   if (m.screen?.frames) out.push("Recevoir l'image du guidage à afficher sur la moto (elle montre la carte autour de toi)");
   return out;
 }
@@ -257,7 +258,7 @@ class Broker {
   }
   one(o, now) {
     const s = this.m.screen, type = o.type;
-    if (["open", "send", "close", "frames", "joystick", "status"].includes(type)) need(s, `« ${type} » : réservé aux modules qui déclarent « screen »`);
+    if (["open", "send", "close", "frames", "joystick", "status", "pair", "inspect"].includes(type)) need(s, `« ${type} » : réservé aux modules qui déclarent « screen »`);
     switch (type) {
       case "open": {
         const ch = this.name(o.channel, "channel");
@@ -265,7 +266,11 @@ class Broker {
         need(this.kinds.size < L.channels, `${L.channels} liaisons au plus`);
         if (o.kind === "udp") { need(this.bike.wifi, "aucun Wi-Fi de moto choisi"); const lp = o.localPort ?? 0; need(lp === 0 || s.udp.has(lp), `port local ${lp} non déclaré (screen.wifi.udp)`); }
         else if (o.kind === "tcp") { this.inSubnet(o.host); need(s.tcp.has(o.port), `port TCP ${o.port} non déclaré (screen.wifi.tcp)`); }
-        else if (o.kind === "rfcomm") { need(this.bike.bluetooth, "aucun appareil Bluetooth de moto choisi"); need(s.rfcomm.has(String(o.uuid).toLowerCase()), `UUID ${o.uuid} non déclaré (screen.bluetooth.rfcomm)`); }
+        else if (o.kind === "rfcomm") {
+          need(this.bike.bluetooth, "aucun appareil Bluetooth de moto choisi");
+          if (o.rfcommChannel !== undefined) { need(s.channels.has(o.rfcommChannel), `canal RFCOMM ${o.rfcommChannel} non déclaré (screen.bluetooth.channels)`); need(!o.server, "« server » : seulement avec un uuid (le téléphone annonce ce service)"); }
+          else need(s.rfcomm.has(String(o.uuid).toLowerCase()), `UUID ${o.uuid} non déclaré (screen.bluetooth.rfcomm)`);
+        }
         else need(false, `type de liaison inconnu : « ${o.kind} » (udp, tcp, rfcomm)`);
         this.kinds.set(ch, o.kind);
         return { type, channel: ch, kind: o.kind };
@@ -278,6 +283,11 @@ class Broker {
         if (kind === "udp") { this.inSubnet(o.host); need(s.udp.has(o.port), `port UDP ${o.port} non déclaré (screen.wifi.udp)`); }
         return { type, channel: ch, host: o.host, port: o.port, data };
       }
+      case "pair": case "inspect":
+        need(this.bike.bluetooth && (s.rfcomm.size || s.channels.size), `« ${type} » : aucun appareil Bluetooth de moto choisi (ou screen.bluetooth non déclaré)`);
+        need(now - (this.lastBt ?? -1e9) >= 2000, "« pair » et « inspect » : un toutes les 2 s au plus");
+        this.lastBt = now;
+        return { type, sdp: !!o.sdp };
       case "close": { const ch = this.name(o.channel, "channel"); need(this.kinds.delete(ch), `liaison « ${ch} » non ouverte`); return { type, channel: ch }; }
       case "timer": {
         const id = this.name(o.id, "id");
@@ -350,6 +360,7 @@ function parseCapture(text) {
   for (const raw of text.split(/\r?\n/)) {
     const l = raw.trimEnd();
     if (!l) continue;
+    if (l.startsWith("#!")) continue; // journal du module (chronologie), pour les humains
     if (l.startsWith("#")) { const m = /^#\s*([^:]+):\s*(.*)$/.exec(l); if (m) meta[m[1].trim()] = m[2]; continue; }
     const c = l.split("\t");
     const t = Number(c[0]);
@@ -372,7 +383,7 @@ function replay(dir, capFile, opts) {
   const { meta, packets } = parseCapture(fs.readFileSync(capFile, "utf8"));
   const incoming = packets.filter((p) => p.incoming && p.data);
   const granted = m.permissions.filter((p) => p !== "position");
-  const bike = { wifi: { address: "192.168.1.20", prefix: 24 }, bluetooth: m.screen.rfcomm.size ? "00:11:22:33:44:55" : null, gateway: "192.168.1.1", ssid: meta.ssid ?? "REJEU" };
+  const bike = { wifi: { address: "192.168.1.20", prefix: 24 }, bluetooth: m.screen.rfcomm.size || m.screen.channels.size ? "00:11:22:33:44:55" : null, gateway: "192.168.1.1", ssid: meta.ssid ?? "REJEU" };
   const out = (s) => console.log(s);
   out(`Rejeu de ${path.basename(capFile)} : ${incoming.length} paquets de l'écran, ${packets.length - incoming.length} envoyés par le téléphone d'origine.`);
   out(`Module ${m.id} ${m.version} · permissions : ${granted.join(", ") || "aucune"} · Wi-Fi 192.168.1.20/24, passerelle 192.168.1.1, SSID ${bike.ssid}\n`);
@@ -403,6 +414,8 @@ function replay(dir, capFile, opts) {
         else if (c.type === "say") out(`${ts(now)} VOIX « ${c.text} »`);
         else if (c.type === "command") out(`${ts(now)} COMMANDE ${c.name}`);
         else if (c.type === "bikeData") out(`${ts(now)} MOTO ${JSON.stringify(c.data)}`);
+        else if (c.type === "pair") { out(`${ts(now)} APPAIRAGE demandé (simulé : réussi)`); queue.push({ type: "bond", state: "bonded", previous: "none" }); }
+        else if (c.type === "inspect") queue.push({ type: "device", address: bike.bluetooth, name: "REJEU", bond: "bonded", deviceType: "classic", uuids: [...m.screen.rfcomm], sdp: c.sdp });
       }
     }
   };

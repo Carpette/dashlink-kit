@@ -16,7 +16,7 @@ Types exacts : [types/dashlink.d.ts](types/dashlink.d.ts). Guide pas à pas : [R
   "screen": {
     "main": "moto.js",
     "wifi": { "udp": [2000, 2002], "tcp": [8080] },
-    "bluetooth": { "rfcomm": ["00001101-0000-1000-8000-00805f9b34fb"] },
+    "bluetooth": { "rfcomm": ["00001101-0000-1000-8000-00805f9b34fb"], "channels": [1] },
     "frames": { "maxWidth": 800, "maxHeight": 480, "maxFps": 10, "formats": ["h264"] }
   },
   "cockpit": { "main": "index.html", "script": "logique.js", "bike": "moto.html" }
@@ -29,6 +29,7 @@ Types exacts : [types/dashlink.d.ts](types/dashlink.d.ts). Guide pas à pas : [R
 | `version` | `x.y.z`, toujours plus grande d'une publication à l'autre |
 | `name`, `author` | 40 et 60 caractères au plus |
 | `screen` | Pilote d'écran : script `main`, et au moins une liaison déclarée (8 ports au plus par type) |
+| `screen.bluetooth` | `rfcomm` : UUID des services (8 au plus) ; `channels` : canaux RFCOMM ouverts par numéro, 1 à 30 (8 au plus) |
 | `screen.frames` | Images du guidage : 16 à 1920 pixels de côté, 1 à 30 images/s, formats `h264`, `rgba`, `jpeg` |
 | `cockpit` | Cockpit : `main` (HTML du téléphone, sans script), `script` (logique, facultatif), `bike` (HTML pour l'écran de la moto, facultatif) |
 
@@ -81,7 +82,9 @@ Disponible : JavaScript standard (`Math`, `JSON`, `Date`, `BigInt`, `TextEncoder
 | `refused` | `reasons` | Actions du lot précédent refusées, avec la raison |
 | `stop` | | Arrêt demandé : dernières trames de politesse (seuls les `send` sont exécutés) |
 | `opened` | `channel` | Liaison ouverte (pilote d'écran) |
-| `closed` | `channel`, `error?` | Liaison perdue |
+| `closed` | `channel`, `error?`, `errorClass?`, `step?`, `cause?`, `ms?`, `bond?` | Liaison perdue ou jamais ouverte. `step` : `connect`, `accept`, `read` ou `write` ; `errorClass` et `cause` : l'exception d'Android telle quelle ; `ms` : durée de la tentative ; `bond` : appairage à ce moment (Bluetooth) |
+| `bond` | `state`, `previous`, `reason?`, `error?` | Appairage Bluetooth : `none`, `bonding`, `bonded` (après `pair`, ou quand il change) |
+| `device` | `address`, `name`, `bond`, `deviceType`, `majorClass?`, `deviceClass?`, `uuids`, `sdp?`, `adapterOn?`, `error?` | Fiche de l'appareil Bluetooth choisi (après `inspect`) ; `sdp: true` quand ses services viennent d'être relus sur l'appareil |
 | `recv` | `channel`, `data`, `host?`, `port?` | Données reçues de l'écran |
 | `frame` | `format`, `width`, `height`, `key`, `pts` (µs), `data` | Image du guidage (après `frames`). Seule la plus récente attend : tu ne prends jamais de retard |
 | `tap` | `id` | Appui sur un élément `data-tap="id"` (cockpit, téléphone seulement) |
@@ -127,7 +130,10 @@ Disponible : JavaScript standard (`Math`, `JSON`, `Date`, `BigInt`, `TextEncoder
 |---|---|---|
 | `{type:'open', channel, kind:'udp', localPort?, broadcast?}` | Socket UDP sur le Wi-Fi de l'écran | `localPort` : 0 ou déclaré |
 | `{type:'open', channel, kind:'tcp', host, port}` | Connexion TCP | `host` dans le réseau de l'écran, `port` déclaré |
-| `{type:'open', channel, kind:'rfcomm', uuid}` | Bluetooth RFCOMM vers l'appareil choisi | UUID déclaré |
+| `{type:'open', channel, kind:'rfcomm', uuid, secure?, server?}` | Bluetooth RFCOMM avec l'appareil choisi. `secure` (vrai par défaut) : liaison chiffrée ; `server` : le téléphone annonce le service et attend que la moto s'y connecte (60 s, seule la moto choisie est acceptée) | UUID déclaré |
+| `{type:'open', channel, kind:'rfcomm', rfcommChannel, secure?}` | RFCOMM par numéro de canal, pour les écrans qui n'annoncent pas leur service | Canal déclaré (`screen.bluetooth.channels`) |
+| `{type:'pair'}` | Appairage avec l'appareil choisi (Android affiche le code) ; suite dans `bond` | Un `pair` ou `inspect` toutes les 2 s |
+| `{type:'inspect', sdp?}` | Fiche de l'appareil (événement `device`) ; `sdp: true` relit ses services sur l'appareil (second `device`) | |
 | `{type:'send', channel, data, host?, port?}` | Envoi (`host`/`port` en UDP) | Adresse IPv4 du réseau de l'écran (diffusion comprise), port déclaré ; 65 507 octets ; 3 000 envois et 4 Mo par seconde |
 | `{type:'close', channel}` | Ferme | 8 liaisons ouvertes au plus |
 | `{type:'frames', width, height, fps, format}` | Demande les images du guidage | Dans `screen.frames` |
@@ -174,6 +180,22 @@ sur toute moto dont l'écran affiche une image (pilote d'écran qui demande des 
 - Mêmes règles que sur le téléphone : HTML filtré, aucun script, aucune adresse extérieure.
 
 Aperçu : `node tools/dashlink.mjs cockpit <dossier> --taille 526x300` montre le téléphone et la moto côte à côte.
+
+## Bluetooth : mener la connexion
+
+Le motard choisit sa moto parmi les appareils appairés (Atelier › Bluetooth de la moto) ; ton module ne voit et
+ne touche que celui-là. Un écran seulement Bluetooth (rien sous `screen.wifi`) démarre ton module sans Wi-Fi.
+
+Quand ça ne marche pas, tout remonte :
+- l'événement `closed`, avec l'étape et l'exception d'Android ;
+- l'appairage (`bond`) et les services annoncés (`device`) ;
+- le journal du module, daté.
+
+Ce journal est copié dans la capture exportée (lignes `#! <ms> <texte>`, ignorées au rejeu). Pour voir sous
+DashLink, active le **journal HCI Bluetooth** dans les options pour les développeurs d'Android, puis récupère-le
+avec `adb bugreport`.
+
+Hors de portée des modules, car gérés par Android : profils audio (HFP, A2DP) et nom Bluetooth du téléphone.
 
 ## Paquet
 

@@ -24,6 +24,7 @@ kit/
   templates/ecran/       modèle de pilote d'écran
   examples/chrono/       un vrai cockpit (livré avec DashLink)
   examples/tripper/      un vrai pilote : l'écran Tripper des Royal Enfield, et une capture d'exemple
+  examples/bmw-ice/      un pilote INACHEVÉ : le TFT BMW en Bluetooth (ZeroC Ice), jamais connecté à une vraie moto
 ```
 
 ## 1. Le premier essai (2 minutes)
@@ -99,6 +100,18 @@ cp -r templates/ecran ../mon-ecran
    `Math.random` sûr ; pour RSA, `BigInt` suffit (voir `examples/tripper/moto.js`).
 
 Pour avancer sans rouler, travaille avec des **captures** (section 4) et `replay`.
+
+**Écran en Bluetooth qui refuse la connexion ?** C'est à ton module de mener la connexion, et DashLink te dit
+tout :
+- l'événement `closed` donne l'étape et l'erreur exacte d'Android ;
+- `inspect` donne la fiche de l'appareil et relit ses services (SDP) ;
+- `pair` refait l'appairage ;
+- `open` accepte `secure: false`, un numéro de canal (`rfcommChannel`) ou `server: true` (l'écran se connecte au
+  téléphone).
+
+Dans l'Atelier, la section « Bluetooth de la moto » montre la même fiche. Le journal HCI Bluetooth d'Android
+(Options pour les développeurs) montre ce qui se passe sous ton module. Pars de `examples/bmw-ice` : il raconte
+ce qui a été essayé.
 
 ## 4. Sur le téléphone
 
