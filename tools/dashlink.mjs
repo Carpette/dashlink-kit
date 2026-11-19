@@ -32,11 +32,22 @@ const PERMS = {
   position: "ta position GPS exacte (accordée seulement aux modules du catalogue qui en ont besoin)",
   voice: "parler dans ton casque",
   report: "signaler un danger à ta position, visible des autres motards",
+  group: "ton groupe : prénom, distance et direction de chaque membre (jamais leur position)",
+  hazards: "les dangers signalés devant toi",
+  weather: "la pluie annoncée sur ton trajet",
+  stops: "ta prochaine étape et ton autonomie d'essence",
+  terrain: "la pente à venir",
+  trip: "l'enregistrement de ton trajet et sa distance",
+  media: "la musique en cours (titre, artiste) et si tu es en appel (sans le nom)",
+  contest: "la course en cours : prochain waypoint et écart à la trace",
+  bikeData: "les données de ta moto remontées par son pilote (essence, rapport, pneus, alertes)",
 };
 const FORMATS = ["h264", "rgba", "jpeg"];
 const JOYSTICK = ["VOLUME_UP", "VOLUME_DOWN", "MUTE", "START_NAVIGATION", "STOP_NAVIGATION", "ZOOM_IN", "ZOOM_OUT", "RECENTER",
   "ANSWER_CALL", "START_MUSIC", "NAVIGATION_NOTIFICATION", "REMOVE_WAYPOINT", "ROADSIDE_ASSISTANCE"];
 const HAZARDS = ["DANGER", "GRAVEL", "ROADWORKS", "CLOSED"];
+const COMMANDS = { zoomIn: "ZOOM_IN", zoomOut: "ZOOM_OUT", arrowMode: "RECENTER", startGuidance: "START_NAVIGATION", stopGuidance: "STOP_NAVIGATION", nextProfile: "START_MUSIC", nextFriend: "NAVIGATION_NOTIFICATION" };
+const BIKE_NUM = { fuelPct: [0, 100], rangeKm: [0, 2000], tyreFrontBar: [0, 10], tyreRearBar: [0, 10], engineTempC: [-40, 200], airTempC: [-50, 70], odometerKm: [0, 2e6], batteryV: [0, 30] };
 const L = { actions: 512, channels: 8, packet: 65_507, timers: 16, minTimer: 10, html: 64_000, log: 2_000, random: 512 };
 
 class Refused extends Error {}
@@ -219,7 +230,7 @@ const int = (h) => h.split(".").reduce((a, x) => ((a << 8) | +x) >>> 0, 0);
 class Broker {
   constructor(m, granted, bike) {
     this.m = m; this.granted = new Set(granted); this.bike = bike;
-    this.kinds = new Map(); this.timers = new Set(); this.lastSay = -1e9; this.lastReport = -1e9;
+    this.kinds = new Map(); this.timers = new Set(); this.lastSay = -1e9; this.lastReport = -1e9; this.lastCommand = -1e9; this.lastBike = -1e9;
   }
   inSubnet(h) {
     const w = this.bike.wifi; need(w, "aucun Wi-Fi de moto choisi");
@@ -285,6 +296,22 @@ class Broker {
         return { type, width: o.width, height: o.height, fps: o.fps, format: o.format };
       }
       case "joystick": need(JOYSTICK.includes(o.command), `commande inconnue : « ${o.command} » (${JOYSTICK.join(", ")})`); return { type, command: o.command };
+      case "command":
+        need(COMMANDS[o.name], `« name » : parmi ${Object.keys(COMMANDS).join(", ")}`);
+        need(now - this.lastCommand >= 500, "une commande toutes les 0,5 s au plus");
+        this.lastCommand = now;
+        return { type, name: o.name };
+      case "bikeData": {
+        need(s, "« bikeData » : réservé aux pilotes d'écran");
+        need(now - this.lastBike >= 500, "données de la moto : deux fois par seconde au plus");
+        this.lastBike = now;
+        const d = {};
+        for (const [key, [lo, hi]] of Object.entries(BIKE_NUM)) if (o[key] !== undefined) { need(typeof o[key] === "number" && o[key] >= lo && o[key] <= hi, `« ${key} » : nombre entre ${lo} et ${hi}`); d[key] = o[key]; }
+        if (o.gear !== undefined) { need(/^(N|[1-9])$/.test(String(o.gear)), "« gear » : N ou 1 à 9"); d.gear = String(o.gear); }
+        if (Array.isArray(o.warnings)) d.warnings = o.warnings.slice(0, 8).map((w) => String(w).slice(0, 40));
+        need(Object.keys(d).length, `aucune donnée reconnue (${[...Object.keys(BIKE_NUM), "gear", "warnings"].join(", ")})`);
+        return { type, data: d };
+      }
       case "log": return { type, text: String(o.text ?? "").slice(0, L.log), level: String(o.level ?? "info").slice(0, 8) };
       case "status": return { type, connected: !!o.connected, text: String(o.text ?? "").slice(0, 80) };
       case "say":
@@ -374,6 +401,8 @@ function replay(dir, capFile, opts) {
         else if (c.type === "status") out(`${ts(now)} ÉTAT ${c.connected ? "connecté" : "pas connecté"} : ${c.text}`);
         else if (c.type === "joystick") out(`${ts(now)} JOYSTICK ${c.command}`);
         else if (c.type === "say") out(`${ts(now)} VOIX « ${c.text} »`);
+        else if (c.type === "command") out(`${ts(now)} COMMANDE ${c.name}`);
+        else if (c.type === "bikeData") out(`${ts(now)} MOTO ${JSON.stringify(c.data)}`);
       }
     }
   };
@@ -452,6 +481,7 @@ function cockpit(dir, port, bikeSize) {
       else if (c.type === "say") say(`VOIX « ${c.text} »`);
       else if (c.type === "vibrate") say(`vibration ${c.ms} ms`);
       else if (c.type === "report") say(`SIGNALEMENT ${c.hazard} (simulé)`);
+      else if (c.type === "command") say(`COMMANDE ${c.name}`);
     }
     if (r.refused.length) run([{ type: "refused", reasons: r.refused }]);
   };
@@ -480,6 +510,16 @@ function cockpit(dir, port, bikeSize) {
     const ride = { type: "ride", bikeLinked: true };
     if (granted.includes("ride")) Object.assign(ride, { time: Date.now(), clock: clk, gps: true, night: false, profile: "ROAD", speedKmh: Math.round(45 + 40 * Math.sin(t / 15)), heading: Math.round(t * 3) % 360, altitude: 420 });
     if (granted.includes("guidance")) ride.guidance = { metersToManeuver: Math.max(0, 800 - Math.round(t * 20) % 800), turnAngle: 90, metersRemaining: 12_000, instruction: "Tourne à droite", road: "D 42" };
+    // Données fictives des autres permissions, pour voir ton affichage les utiliser.
+    if (granted.includes("group")) Object.assign(ride, { group: [{ name: "Alex", meters: 400 + Math.round(300 * Math.sin(t / 10)), bearing: 180, stopped: false, ageS: 2 }, { name: "Sam", meters: 2300, bearing: 170, stopped: true, ageS: 5 }], sweeperGap: "SF 2,3 km" });
+    if (granted.includes("hazards")) ride.hazards = [{ type: "GRAVEL", meters: Math.max(0, 1500 - Math.round(t * 15) % 1500), ahead: true }];
+    if (granted.includes("weather")) ride.rainInMin = 25;
+    if (granted.includes("stops")) Object.assign(ride, { nextStop: { name: "Col de la Croix", meters: 8400 }, fuelRangeKm: Math.max(0, 140 - Math.round(t / 10)) });
+    if (granted.includes("terrain")) ride.slopeAhead = "↗ 12 % à 600 m";
+    if (granted.includes("trip")) Object.assign(ride, { recording: true, recordedMeters: Math.round(t * 15) });
+    if (granted.includes("media")) Object.assign(ride, { media: { title: "Highway Star", artist: "Deep Purple", playing: true }, inCall: false });
+    if (granted.includes("contest")) Object.assign(ride, { contest: "WP 4 · 1,2 km" });
+    if (granted.includes("bikeData")) ride.bike = { fuelPct: 62, rangeKm: 180, gear: "4", tyreFrontBar: 2.3, tyreRearBar: 2.5 };
     run([ride]);
   }, 1000);
   const runtime = fs.readFileSync(path.join(HERE, "cockpit-runtime.js"), "utf8");

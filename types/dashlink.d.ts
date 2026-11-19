@@ -18,6 +18,31 @@ interface RideEvent {
   lat?: number; lon?: number;
   // permission « guidance »
   guidance?: Guidance; speedLimit?: number;
+  // permission « group » : jamais la position des autres
+  group?: { name: string; meters?: number; bearing?: number; stopped: boolean; ageS: number; role?: string }[];
+  regroupMeters?: number; sweeperGap?: string;
+  // permission « hazards »
+  hazards?: { type: string; meters: number; ahead: boolean }[];
+  alert?: { type: string; meters?: number; stillThere?: boolean };
+  // permission « weather »
+  rainInMin?: number;
+  // permission « stops »
+  nextStop?: { name: string; meters: number }; fuelRangeKm?: number;
+  // permission « terrain »
+  slopeAhead?: string;
+  // permission « trip »
+  recording?: boolean; recordedMeters?: number;
+  // permission « media » (jamais l'appelant)
+  media?: { title: string; artist: string; playing: boolean }; inCall?: boolean;
+  // permission « contest »
+  contest?: string; contestOffMeters?: number;
+  // permission « bikeData » : ce que le pilote de la moto remonte
+  bike?: BikeData;
+}
+interface BikeData {
+  fuelPct?: number; rangeKm?: number; gear?: "N" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+  tyreFrontBar?: number; tyreRearBar?: number; engineTempC?: number; airTempC?: number; odometerKm?: number; batteryV?: number;
+  warnings?: string[];
 }
 interface Guidance {
   metersToManeuver: number; turnAngle: number; metersRemaining: number; instruction: string;
@@ -42,7 +67,7 @@ interface DisplayEvent { type: "display"; phone: boolean; bike: { width: number;
 interface ButtonEvent { type: "button"; command: JoystickCommand }
 
 type DashLinkEvent = StartEvent | RideEvent | TimerEvent | RefusedEvent | StopEvent | OpenedEvent | ClosedEvent | RecvEvent | FrameEvent | TapEvent | DisplayEvent | ButtonEvent;
-type Permission = "ride" | "guidance" | "position" | "voice" | "report";
+type Permission = "ride" | "guidance" | "position" | "voice" | "report" | "group" | "hazards" | "weather" | "stops" | "terrain" | "trip" | "media" | "contest" | "bikeData";
 
 // ---- actions renvoyées -------------------------------------------------------------------------
 
@@ -51,6 +76,7 @@ type DashLinkAction =
   | { type: "timer"; id: string; ms: number; repeat?: boolean } | { type: "timer"; id: string; cancel: true }
   | { type: "log"; text: string; level?: "info" | "warn" | "error" }
   | { type: "say"; text: string }                                  // permission « voice »
+  | { type: "command"; name: "zoomIn" | "zoomOut" | "arrowMode" | "startGuidance" | "stopGuidance" | "nextProfile" | "nextFriend" }
   // pilote d'écran
   | { type: "open"; channel: string; kind: "udp"; localPort?: number; broadcast?: boolean }
   | { type: "open"; channel: string; kind: "tcp"; host: string; port: number }
@@ -60,6 +86,7 @@ type DashLinkAction =
   | { type: "frames"; width: number; height: number; fps: number; format: "h264" | "rgba" | "jpeg" } | { type: "frames"; stop: true }
   | { type: "joystick"; command: JoystickCommand }
   | { type: "status"; connected: boolean; text: string }
+  | ({ type: "bikeData" } & BikeData)
   // cockpit
   | { type: "ui"; op: "html"; html: string; display?: Display }
   | { type: "ui"; op: "text"; id: string; text: string; display?: Display }

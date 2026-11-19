@@ -43,6 +43,15 @@ Un module peut déclarer `screen`, `cockpit`, ou les deux (deux scripts séparé
 | `position` | Latitude et longitude exactes. **Catalogue seulement**, à justifier à la relecture |
 | `voice` | Annonces vocales dans le casque |
 | `report` | Signaler un danger à la position actuelle (sans voir la position) |
+| `group` | Sortie de groupe : prénom, distance, direction, arrêt de chaque membre ; regroupement, serre-file. Jamais leur position |
+| `hazards` | Dangers signalés à moins de 5 km (type, distance, devant ou non) et alerte en cours |
+| `weather` | Pluie annoncée sur le trajet |
+| `stops` | Prochaine étape de l'itinéraire, autonomie d'essence |
+| `terrain` | Pente la plus forte à venir (tout-terrain) |
+| `trip` | Enregistrement du trajet en cours, distance enregistrée |
+| `media` | Musique en cours (titre, artiste, lecture) ; en appel ou non (jamais l'appelant) |
+| `contest` | Compétition : prochain waypoint, écart à la trace |
+| `bikeData` | Données de la moto remontées par son pilote d'écran (essence, rapport, pneus…) |
 
 Le motard voit la liste avant d'installer. Sans permission, `ride` ne contient que `bikeLinked`.
 
@@ -90,6 +99,15 @@ Disponible : JavaScript standard (`Math`, `JSON`, `Date`, `BigInt`, `TextEncoder
 | `lat`, `lon` | `position` | Position exacte |
 | `guidance` | `guidance` | En guidage : `metersToManeuver`, `turnAngle` (−180…180, négatif = gauche), `metersRemaining`, `instruction`, et si connus `thenAngle`, `secondsRemaining`, `speedLimit`, `roundaboutExit`, `offTrackMeters`, `maneuver`, `road`, `ref`, `towards` |
 | `speedLimit` | `guidance` | Sans guidage : limitation de la route actuelle, si connue |
+| `group` | `group` | `[{name, meters, bearing, stopped, ageS, role?}]` (distance et direction depuis toi) ; `regroupMeters`, `sweeperGap` |
+| `hazards`, `alert` | `hazards` | `[{type, meters, ahead}]` (10 au plus, les plus proches) ; `alert` : `{type, meters?, stillThere?}` |
+| `rainInMin` | `weather` | Pluie dans tant de minutes |
+| `nextStop`, `fuelRangeKm` | `stops` | `{name, meters}` ; autonomie en km (celle de la moto si son pilote la donne) |
+| `slopeAhead` | `terrain` | Ex. `"↗ 18 % à 600 m"` |
+| `recording`, `recordedMeters` | `trip` | |
+| `media`, `inCall` | `media` | `{title, artist, playing}` |
+| `contest`, `contestOffMeters` | `contest` | Ex. `"WP 4 · 1,2 km"` |
+| `bike` | `bikeData` | Dernières données de la moto (30 s au plus) : voir l'action `bikeData` |
 
 ## Actions
 
@@ -101,6 +119,7 @@ Disponible : JavaScript standard (`Math`, `JSON`, `Date`, `BigInt`, `TextEncoder
 | `{type:'timer', id, cancel:true}` | Annule | |
 | `{type:'log', text, level?}` | Journal (Atelier des modules) | 2 000 caractères, 200 par seconde |
 | `{type:'say', text}` | Voix dans le casque | `voice` ; 140 caractères ; une toutes les 3 s |
+| `{type:'command', name}` | Commande de DashLink, comme un bouton du guidon : `zoomIn`, `zoomOut`, `arrowMode`, `startGuidance`, `stopGuidance`, `nextProfile`, `nextFriend` | Une toutes les 0,5 s |
 
 ### Pilote d'écran
 
@@ -115,6 +134,7 @@ Disponible : JavaScript standard (`Math`, `JSON`, `Date`, `BigInt`, `TextEncoder
 | `{type:'frames', stop:true}` | Plus d'images | |
 | `{type:'joystick', command}` | Commande de DashLink depuis le joystick de la moto | `ZOOM_IN`, `ZOOM_OUT`, `RECENTER`, `VOLUME_UP`, `VOLUME_DOWN`, `MUTE`, `START_NAVIGATION`, `STOP_NAVIGATION`, `ANSWER_CALL`, `START_MUSIC`, `NAVIGATION_NOTIFICATION`, `REMOVE_WAYPOINT`, `ROADSIDE_ASSISTANCE` |
 | `{type:'status', connected, text}` | État montré au motard | 80 caractères |
+| `{type:'bikeData', …}` | Données lues sur la moto, transmises aux cockpits (`bikeData`) ; `rangeKm` remplace l'estimation d'essence de DashLink | Deux fois par seconde ; champs : `fuelPct`, `rangeKm`, `gear` (`N`, `1`…`9`), `tyreFrontBar`, `tyreRearBar`, `engineTempC`, `airTempC`, `odometerKm`, `batteryV`, `warnings` (8 textes). Les autres sont ignorés |
 
 ### Cockpit
 
