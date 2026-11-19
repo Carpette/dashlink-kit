@@ -30,7 +30,8 @@ Types exacts : [types/dashlink.d.ts](types/dashlink.d.ts). Guide pas à pas : [R
 | `name`, `author` | 40 et 60 caractères au plus |
 | `screen` | Pilote d'écran : script `main`, et au moins une liaison déclarée (8 ports au plus par type) |
 | `screen.wifi` | `udp`, `tcp` : ports ; `lowLatency`, `multicast` (vrais par défaut) : à `false`, DashLink lâche le Wi-Fi faible latence ou le verrou multicast pendant que ton module tourne, pour essayer |
-| `screen.bluetooth` | `rfcomm` : UUID des services (8 au plus) ; `channels` : canaux RFCOMM ouverts par numéro, 1 à 30 (8 au plus) |
+| `screen.bluetooth` | `rfcomm` : UUID des services (8 au plus) ; `channels` : canaux RFCOMM ouverts par numéro, 1 à 30 (8 au plus) ; `ble` : `{ "<service>": ["<caractéristique>", …] }`, 8 services et 16 caractéristiques par service au plus |
+| `screen.detect` | Ce qui reconnaît l'écran : `bluetoothName` (débuts de noms Bluetooth), `wifiName` (débuts de noms de Wi-Fi), `service` (UUID annoncés). DashLink met ton pilote en tête du catalogue, « Fait pour ta moto », chez les motards dont la moto correspond |
 | `screen.frames` | Images du guidage : 16 à 1920 pixels de côté, 1 à 30 images/s, formats `h264`, `rgba`, `jpeg` |
 | `cockpit` | Cockpit : `main` (HTML du téléphone, sans script), `script` (logique, facultatif), `bike` (HTML pour l'écran de la moto, facultatif) |
 
@@ -70,7 +71,7 @@ Chaque appel doit finir en **200 ms** sur le téléphone, sinon le module est ar
 pour un pilote d'écran). Mémoire : 64 Mo. Les octets sont des `Uint8Array`, dans les deux sens.
 
 Disponible : JavaScript standard (`Math`, `JSON`, `Date`, `BigInt`, `TextEncoder` absent : encode toi-même),
-`DashLink.random(n)` (aléa sûr, 512 octets par lot au plus). Absent : `fetch`, `XMLHttpRequest`, `WebSocket`,
+`DashLink.random(n)` (aléa sûr, 512 octets par lot au plus), `DashLink.crypto` (voir plus bas). Absent : `fetch`, `XMLHttpRequest`, `WebSocket`,
 `setTimeout`, `setInterval`, `crypto`, `document`, `import()`.
 
 ## Événements
@@ -84,9 +85,10 @@ Disponible : JavaScript standard (`Math`, `JSON`, `Date`, `BigInt`, `TextEncoder
 | `stop` | | Arrêt demandé : dernières trames de politesse (seuls les `send` sont exécutés) |
 | `opened` | `channel` | Liaison ouverte (pilote d'écran) |
 | `closed` | `channel`, `error?`, `errorClass?`, `step?`, `cause?`, `ms?`, `bond?` | Liaison perdue ou jamais ouverte. `step` : `connect`, `accept`, `read` ou `write` ; `errorClass` et `cause` : l'exception d'Android telle quelle ; `ms` : durée de la tentative ; `bond` : appairage à ce moment (Bluetooth) |
+| `ble` | `channel`, `op`, `status`, … | BLE : `op: "services"` à l'ouverture (table GATT complète de l'écran, `mtu`), puis le résultat de chaque `bleRead` (`data`), `bleWrite`, `bleNotify`. `status` : code GATT d'Android (0 = réussi) |
 | `bond` | `state`, `previous`, `reason?`, `error?` | Appairage Bluetooth : `none`, `bonding`, `bonded` (après `pair`, ou quand il change) |
 | `device` | `address`, `name`, `bond`, `deviceType`, `majorClass?`, `deviceClass?`, `uuids`, `sdp?`, `adapterOn?`, `error?` | Fiche de l'appareil Bluetooth choisi (après `inspect`) ; `sdp: true` quand ses services viennent d'être relus sur l'appareil |
-| `recv` | `channel`, `data`, `host?`, `port?` | Données reçues de l'écran |
+| `recv` | `channel`, `data`, `host?`, `port?`, `service?`, `characteristic?` | Données reçues de l'écran (BLE : notification ou indication de cette caractéristique) |
 | `frame` | `format`, `width`, `height`, `key`, `pts` (µs), `data` | Image du guidage (après `frames`). Seule la plus récente attend : tu ne prends jamais de retard |
 | `tap` | `id` | Appui sur un élément `data-tap="id"` (cockpit, téléphone seulement) |
 | `display` | `phone`, `bike` | Affichages ouverts du cockpit : `phone` (vrai ou faux), `bike` (`{width, height}` ou `null`). Envoyé à chaque changement |
@@ -133,6 +135,10 @@ Disponible : JavaScript standard (`Math`, `JSON`, `Date`, `BigInt`, `TextEncoder
 | `{type:'open', channel, kind:'tcp', host, port}` | Connexion TCP | `host` dans le réseau de l'écran, `port` déclaré |
 | `{type:'open', channel, kind:'rfcomm', uuid, secure?, server?}` | Bluetooth RFCOMM avec l'appareil choisi. `secure` (vrai par défaut) : liaison chiffrée ; `server` : le téléphone annonce le service et attend que la moto s'y connecte (60 s, seule la moto choisie est acceptée) | UUID déclaré |
 | `{type:'open', channel, kind:'rfcomm', rfcommChannel, secure?}` | RFCOMM par numéro de canal, pour les écrans qui n'annoncent pas leur service | Canal déclaré (`screen.bluetooth.channels`) |
+| `{type:'open', channel, kind:'ble', mtu?, priority?}` | BLE, le téléphone se connecte à l'écran choisi ; `mtu` 23 à 517 ; `priority` `low`, `balanced`, `high` | Services déclarés (`screen.bluetooth.ble`) |
+| `{type:'bleRead', channel, service, characteristic}` | Lecture (résultat dans `ble`) | Caractéristique déclarée |
+| `{type:'bleWrite', channel, service, characteristic, data, response?}` | Écriture, avec réponse par défaut (`response: false` : sans) | Déclarée ; 512 octets ; mêmes plafonds de débit que `send` |
+| `{type:'bleNotify', channel, service, characteristic, on?}` | Notifications ou indications (selon la caractéristique) : elles arrivent en `recv` | Déclarée |
 | `{type:'pair'}` | Appairage avec l'appareil choisi (Android affiche le code) ; suite dans `bond` | Un `pair` ou `inspect` toutes les 2 s |
 | `{type:'inspect', sdp?}` | Fiche de l'appareil (événement `device`) ; `sdp: true` relit ses services sur l'appareil (second `device`) | |
 | `{type:'send', channel, data, host?, port?}` | Envoi (`host`/`port` en UDP) | Adresse IPv4 du réseau de l'écran (diffusion comprise), port déclaré ; 65 507 octets ; 3 000 envois et 4 Mo par seconde |
@@ -222,7 +228,30 @@ Ce journal est copié dans la capture exportée (lignes `#! <ms> <texte>`, ignor
 DashLink, active le **journal HCI Bluetooth** dans les options pour les développeurs d'Android, puis récupère-le
 avec `adb bugreport`.
 
+**BLE.** Les opérations attendent leur tour : Android n'en fait qu'une à la fois. Chaque échec revient avec son
+code GATT. L'appairage et ses clés restent chez Android ; ton module ne les voit jamais. Les services de mise à
+jour du logiciel de l'écran sont refusés, au dépôt comme sur le téléphone :
+- Nordic DFU ;
+- mcumgr ;
+- Silicon Labs OTA ;
+- TI OAD ;
+- Dialog SUOTA.
+
+Un pilote ne reprogramme jamais l'écran d'une moto. Le téléphone en rôle périphérique (l'écran se connecte à lui en
+BLE) n'est pas encore possible.
+
 Hors de portée des modules, car gérés par Android : profils audio (HFP, A2DP) et nom Bluetooth du téléphone.
+
+## Cryptographie (`DashLink.crypto`)
+
+Calculée dans le bac à sable, synchrone, vérifiée face à la cryptographie d'Android :
+- SHA-1, SHA-256, HMAC-SHA1, HMAC-SHA256 ;
+- AES 128, 192 et 256 bits, en ECB, CBC (bourrage PKCS#7), CTR et GCM (iv de 12 octets, étiquette de 16 octets) ;
+- ECDH P-256 : `generate()`, `derive(privée, publiqueDeLÉcran)`.
+
+Les clés publiques sont non compressées (65 octets). Les signatures types exactes sont dans
+[types/dashlink.d.ts](types/dashlink.d.ts). Ce n'est pas en temps constant : assez pour parler à un écran, pas pour
+garder un secret face à quelqu'un qui mesure ton téléphone.
 
 ## Paquet
 

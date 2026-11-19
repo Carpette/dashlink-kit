@@ -48,6 +48,10 @@ const FORMATS = ["h264", "rgba", "jpeg"];
 const JOYSTICK = ["VOLUME_UP", "VOLUME_DOWN", "MUTE", "START_NAVIGATION", "STOP_NAVIGATION", "ZOOM_IN", "ZOOM_OUT", "RECENTER",
   "ANSWER_CALL", "START_MUSIC", "NAVIGATION_NOTIFICATION", "REMOVE_WAYPOINT", "ROADSIDE_ASSISTANCE"];
 const HAZARDS = ["DANGER", "GRAVEL", "ROADWORKS", "CLOSED"];
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Services de mise à jour du logiciel des appareils BLE : interdits aux modules (mêmes que l'appli).
+const BLE_FORBIDDEN = ["0000fe59-0000-1000-8000-00805f9b34fb", "00001530-1212-efde-1523-785feabcd123", "8d53dc1d-1db7-4cd3-868b-8a527460aa84",
+  "1d14d6ee-fd63-4fa1-bfa4-8f47b42119f0", "f000ffc0-0451-4000-b000-000000000000", "0000fef5-0000-1000-8000-00805f9b34fb"];
 const COMMANDS = { zoomIn: "ZOOM_IN", zoomOut: "ZOOM_OUT", arrowMode: "RECENTER", startGuidance: "START_NAVIGATION", stopGuidance: "STOP_NAVIGATION", nextProfile: "START_MUSIC", nextFriend: "NAVIGATION_NOTIFICATION" };
 const BIKE_NUM = { fuelPct: [0, 100], rangeKm: [0, 2000], tyreFrontBar: [0, 10], tyreRearBar: [0, 10], engineTempC: [-40, 200], airTempC: [-50, 70], odometerKm: [0, 2e6], batteryV: [0, 30] };
 const L = { actions: 512, channels: 8, packet: 65_507, timers: 16, minTimer: 10, html: 64_000, log: 2_000, random: 512 };
@@ -97,6 +101,16 @@ function manifestOf(files) {
     file(s.main, ".js", "screen.main");
     screen = { main: s.main, udp: ports(s.wifi?.udp, "screen.wifi.udp"), tcp: ports(s.wifi?.tcp, "screen.wifi.tcp"),
       rfcomm: new Set((s.bluetooth?.rfcomm ?? []).map((u) => String(u).toLowerCase())), channels: new Set(s.bluetooth?.channels ?? []), frames: null };
+    screen.ble = new Map();
+    for (const [svc, chars] of Object.entries(s.bluetooth?.ble ?? {})) {
+      if (!UUID.test(svc)) fail(`« screen.bluetooth.ble » : UUID invalide « ${svc} »`);
+      if (BLE_FORBIDDEN.includes(svc.toLowerCase())) fail(`service BLE ${svc} : mise à jour du logiciel de l'écran, interdit aux modules`);
+      if (!Array.isArray(chars) || chars.length < 1 || chars.length > 16 || !chars.every((c) => UUID.test(c))) fail(`« screen.bluetooth.ble.${svc} » : 1 à 16 UUID de caractéristiques`);
+      screen.ble.set(svc.toLowerCase(), new Set(chars.map((c) => c.toLowerCase())));
+    }
+    if (screen.ble.size > 8) fail("« screen.bluetooth.ble » : 8 services au plus");
+    if (s.detect) for (const key of ["bluetoothName", "wifiName"]) for (const n of s.detect[key] ?? []) if (String(n).trim().length < 2 || String(n).trim().length > 32) fail(`« screen.detect.${key} » : 2 à 32 caractères`);
+    for (const u of s.detect?.service ?? []) if (!UUID.test(u)) fail(`« screen.detect.service » : UUID invalide « ${u} »`);
     if (screen.channels.size > 8 || ![...screen.channels].every((c) => Number.isInteger(c) && c >= 1 && c <= 30)) fail("« screen.bluetooth.channels » : 8 canaux au plus, de 1 à 30");
     if (s.frames) {
       const f = s.frames;
@@ -105,7 +119,7 @@ function manifestOf(files) {
       if (!Array.isArray(f.formats) || !f.formats.length || !f.formats.every((x) => FORMATS.includes(x))) fail(`« frames.formats » : parmi ${FORMATS.join(", ")}`);
       screen.frames = f;
     }
-    if (!screen.udp.size && !screen.tcp.size && !screen.rfcomm.size && !screen.channels.size) fail("« screen » : déclare au moins une liaison (wifi.udp, wifi.tcp, bluetooth.rfcomm ou bluetooth.channels)");
+    if (!screen.udp.size && !screen.tcp.size && !screen.rfcomm.size && !screen.channels.size && !screen.ble.size) fail("« screen » : déclare au moins une liaison (wifi.udp, wifi.tcp, bluetooth.rfcomm, bluetooth.channels ou bluetooth.ble)");
   }
   if (o.cockpit) {
     file(o.cockpit.main, ".html", "cockpit.main");
@@ -120,7 +134,8 @@ function manifestOf(files) {
 function consentLines(m) {
   const out = m.permissions.map((p) => "Voir ou faire : " + PERMS[p]);
   if (m.screen?.udp.size || m.screen?.tcp.size) out.push("Parler à l'écran Wi-Fi de ta moto (seulement le réseau que tu choisiras, jamais internet)");
-  if (m.screen?.rfcomm.size || m.screen?.channels.size) out.push("Parler à l'écran Bluetooth de ta moto (seulement l'appareil que tu choisiras)");
+  if (m.screen?.rfcomm.size || m.screen?.channels.size || m.screen?.ble.size) out.push("Parler à l'écran Bluetooth de ta moto (seulement l'appareil que tu choisiras)");
+  if (m.screen?.ble.size) out.push(`Lire et écrire ${[...m.screen.ble.values()].reduce((n, c) => n + c.size, 0)} caractéristiques Bluetooth basse consommation de cet écran, et rien d'autre`);
   if (m.screen?.frames) out.push("Recevoir l'image du guidage à afficher sur la moto (elle montre la carte autour de toi)");
   return out;
 }
@@ -179,6 +194,7 @@ function zip(files) {
 class Sandbox {
   constructor(code, file, log) {
     this.ctx = vm.createContext(Object.create(null), { codeGeneration: { strings: true, wasm: true }, microtaskMode: "afterEvaluate" });
+    vm.runInContext(fs.readFileSync(path.join(HERE, "dashlink-crypto.js"), "utf8"), this.ctx, { filename: "dashlink-crypto.js" });
     vm.runInContext(PRELUDE, this.ctx, { filename: "dashlink-prelude.js" });
     vm.runInContext(code, this.ctx, { filename: file, timeout: 2000 });
     this.log = log;
@@ -205,9 +221,12 @@ const PRELUDE = `
   const dec = (s) => { const t = s.replace(/=+$/, ''), o = new Uint8Array((t.length * 3) >> 2); let k = 0, acc = 0, bits = 0;
     for (const ch of t) { acc = (acc << 6) | A.indexOf(ch); bits += 6; if (bits >= 8) { bits -= 8; o[k++] = (acc >> bits) & 255; } } return o; };
   let pool = new Uint8Array(0), pos = 0, last = '[]';
-  Object.defineProperty(globalThis, 'DashLink', { value: Object.freeze({ random(n) {
+  function random(n) {
     if (!(n >= 0) || pos + n > pool.length) throw new Error('DashLink.random : ' + pool.length + ' octets d\\'aléa par lot au plus');
-    const r = pool.slice(pos, pos + n); pos += n; return r; } }) });
+    const r = pool.slice(pos, pos + n); pos += n; return r; }
+  const crypto = globalThis.__dlCrypto(random);
+  delete globalThis.__dlCrypto;
+  Object.defineProperty(globalThis, 'DashLink', { value: Object.freeze({ random, crypto }) });
   const ser = (out) => JSON.stringify({ actions: out || [] }, (k, v) => v instanceof Uint8Array ? { b64: enc(v) } : v instanceof ArrayBuffer ? { b64: enc(new Uint8Array(v)) } : v);
   Object.defineProperty(globalThis, '__dl', { value: Object.freeze({
     run(json, rnd) {
@@ -260,7 +279,7 @@ class Broker {
   }
   one(o, now) {
     const s = this.m.screen, type = o.type;
-    if (["open", "send", "close", "frames", "joystick", "status", "pair", "inspect"].includes(type)) need(s, `« ${type} » : réservé aux modules qui déclarent « screen »`);
+    if (["open", "send", "close", "frames", "joystick", "status", "pair", "inspect", "bleRead", "bleWrite", "bleNotify"].includes(type)) need(s, `« ${type} » : réservé aux modules qui déclarent « screen »`);
     switch (type) {
       case "open": {
         const ch = this.name(o.channel, "channel");
@@ -273,17 +292,33 @@ class Broker {
           if (o.rfcommChannel !== undefined) { need(s.channels.has(o.rfcommChannel), `canal RFCOMM ${o.rfcommChannel} non déclaré (screen.bluetooth.channels)`); need(!o.server, "« server » : seulement avec un uuid (le téléphone annonce ce service)"); }
           else need(s.rfcomm.has(String(o.uuid).toLowerCase()), `UUID ${o.uuid} non déclaré (screen.bluetooth.rfcomm)`);
         }
-        else need(false, `type de liaison inconnu : « ${o.kind} » (udp, tcp, rfcomm)`);
+        else if (o.kind === "ble") {
+          need(this.bike.bluetooth, "aucun appareil Bluetooth de moto choisi"); need(s.ble.size, "aucun service BLE déclaré (screen.bluetooth.ble)");
+          need(o.mtu === undefined || o.mtu === 0 || (o.mtu >= 23 && o.mtu <= 517), "« mtu » : de 23 à 517");
+          need(o.priority === undefined || ["low", "balanced", "high"].includes(o.priority), "« priority » : low, balanced ou high");
+        }
+        else need(false, `type de liaison inconnu : « ${o.kind} » (udp, tcp, rfcomm, ble)`);
         this.kinds.set(ch, o.kind);
         return { type, channel: ch, kind: o.kind };
       }
       case "send": {
         const ch = this.name(o.channel, "channel"), kind = this.kinds.get(ch);
         need(kind, `liaison « ${ch} » non ouverte`);
+        need(kind !== "ble", "liaison BLE : bleWrite, pas send");
         const data = this.bytes(o.data);
         need(data.length >= 1 && data.length <= L.packet, `taille ${data.length} hors limites (1 à ${L.packet} octets)`);
         if (kind === "udp") { this.inSubnet(o.host); need(s.udp.has(o.port), `port UDP ${o.port} non déclaré (screen.wifi.udp)`); }
         return { type, channel: ch, host: o.host, port: o.port, data };
+      }
+      case "bleRead": case "bleWrite": case "bleNotify": {
+        const ch = this.name(o.channel, "channel");
+        need(this.kinds.get(ch) === "ble", `liaison BLE « ${ch} » non ouverte`);
+        const svc = String(o.service).toLowerCase(), chr = String(o.characteristic).toLowerCase();
+        need(s.ble.get(svc)?.has(chr), `caractéristique ${o.characteristic} du service ${o.service} non déclarée (screen.bluetooth.ble)`);
+        if (type !== "bleWrite") return { type, channel: ch, service: svc, characteristic: chr, on: o.on !== false };
+        const data = this.bytes(o.data);
+        need(data.length >= 1 && data.length <= 512, "écriture BLE : 1 à 512 octets");
+        return { type, channel: ch, service: svc, characteristic: chr, data, response: o.response !== false };
       }
       case "pair": case "inspect":
         need(this.bike.bluetooth && (s.rfcomm.size || s.channels.size), `« ${type} » : aucun appareil Bluetooth de moto choisi (ou screen.bluetooth non déclaré)`);
@@ -445,7 +480,7 @@ function replay(dir, capFile, opts) {
   const { meta, packets } = parseCapture(fs.readFileSync(capFile, "utf8"));
   const incoming = packets.filter((p) => p.incoming && p.data);
   const granted = m.permissions.filter((p) => p !== "position");
-  const bike = { wifi: { address: "192.168.1.20", prefix: 24 }, bluetooth: m.screen.rfcomm.size || m.screen.channels.size ? "00:11:22:33:44:55" : null, gateway: "192.168.1.1", ssid: meta.ssid ?? "REJEU" };
+  const bike = { wifi: { address: "192.168.1.20", prefix: 24 }, bluetooth: m.screen.rfcomm.size || m.screen.channels.size || m.screen.ble.size ? "00:11:22:33:44:55" : null, gateway: "192.168.1.1", ssid: meta.ssid ?? "REJEU" };
   const out = (s) => console.log(s);
   out(`Rejeu de ${path.basename(capFile)} : ${incoming.length} paquets de l'écran, ${packets.length - incoming.length} envoyés par le téléphone d'origine.`);
   out(`Module ${m.id} ${m.version} · permissions : ${granted.join(", ") || "aucune"} · Wi-Fi 192.168.1.20/24, passerelle 192.168.1.1, SSID ${bike.ssid}\n`);
@@ -465,7 +500,13 @@ function replay(dir, capFile, opts) {
       for (const x of r.refused) { refusedN++; out(`${ts(now)} REFUSÉ ${x}`); }
       if (r.refused.length) queue.push({ type: "refused", reasons: r.refused });
       for (const c of r.ok) {
-        if (c.type === "open") { open.add(c.channel); queue.push({ type: "opened", channel: c.channel }); out(`${ts(now)} liaison ${c.channel} ouverte (${c.kind})`); }
+        if (c.type === "open") {
+          open.add(c.channel); queue.push({ type: "opened", channel: c.channel }); out(`${ts(now)} liaison ${c.channel} ouverte (${c.kind})`);
+          // BLE simulé : la table ne contient que ce que le manifeste déclare (sur la moto, la vraie table GATT).
+          if (c.kind === "ble") queue.push({ type: "ble", channel: c.channel, op: "services", mtu: 23, services: [...m.screen.ble].map(([uuid, cs]) => ({ uuid, characteristics: [...cs].map((u) => ({ uuid: u, properties: ["read", "write", "notify"], descriptors: [] })) })) });
+        }
+        else if (c.type === "bleWrite") { sent[c.channel] = (sent[c.channel] ?? 0) + 1; if (!opts.quiet) out(`${ts(now)} → ${c.channel} ${c.characteristic.slice(0, 8)}  ${hexOf(c.data, opts.full ? 1e9 : 48)}`); queue.push({ type: "ble", channel: c.channel, op: "write", service: c.service, characteristic: c.characteristic, status: 0 }); }
+        else if (c.type === "bleRead" || c.type === "bleNotify") queue.push({ type: "ble", channel: c.channel, op: c.type === "bleRead" ? "read" : "notify", service: c.service, characteristic: c.characteristic, status: 0, ...(c.type === "bleRead" ? { data64: "" } : {}) });
         else if (c.type === "send") { sent[c.channel] = (sent[c.channel] ?? 0) + 1; if (!opts.quiet) out(`${ts(now)} → ${c.channel}${c.host ? " " + c.host + ":" + c.port : ""}  ${hexOf(c.data, opts.full ? 1e9 : 48)}`); }
         else if (c.type === "close") { open.delete(c.channel); out(`${ts(now)} liaison ${c.channel} fermée`); }
         else if (c.type === "timer") { if (c.cancel) timers.delete(c.id); else timers.set(c.id, { due: now + c.ms, period: c.repeat ? c.ms : 0 }); }

@@ -62,11 +62,18 @@ interface ClosedEvent {
 }
 type Bond = "none" | "bonding" | "bonded";
 interface BondEvent { type: "bond"; state: Bond; previous: Bond; reason?: number; error?: string }
+/** BLE : table GATT à l'ouverture (op « services »), puis le résultat de chaque bleRead, bleWrite, bleNotify. */
+interface BleEvent {
+  type: "ble"; channel: string; op: "services" | "read" | "write" | "notify"; service?: string; characteristic?: string;
+  /** Code GATT d'Android (0 = réussi) ; -1 : caractéristique absente de l'écran ; -2 : refusé par Android. */
+  status?: number; error?: string; data?: Uint8Array; mtu?: number;
+  services?: { uuid: string; characteristics: { uuid: string; properties: ("read" | "write" | "writeNoResponse" | "notify" | "indicate")[]; descriptors: string[] }[] }[];
+}
 interface DeviceEvent {
   type: "device"; address: string; name?: string | null; bond?: Bond; deviceType?: "classic" | "le" | "dual" | "unknown";
   majorClass?: number; deviceClass?: number; uuids?: string[]; sdp?: boolean; adapterOn?: boolean; error?: string;
 }
-interface RecvEvent { type: "recv"; channel: string; host?: string; port?: number; data: Uint8Array }
+interface RecvEvent { type: "recv"; channel: string; host?: string; port?: number; data: Uint8Array; /** BLE : notification de cette caractéristique */ service?: string; characteristic?: string }
 /** Image encodée par DashLink (après une action « frames »). H.264 : Annex B, SPS et PPS devant chaque image clé. */
 interface FrameEvent { type: "frame"; format: "h264" | "rgba" | "jpeg"; width: number; height: number; key: boolean; pts: number; data: Uint8Array }
 // Cockpit
@@ -76,7 +83,7 @@ interface DisplayEvent { type: "display"; phone: boolean; bike: { width: number;
 /** Bouton du guidon. */
 interface ButtonEvent { type: "button"; command: JoystickCommand }
 
-type DashLinkEvent = StartEvent | RideEvent | TimerEvent | RefusedEvent | StopEvent | OpenedEvent | ClosedEvent | RecvEvent | FrameEvent | TapEvent | DisplayEvent | ButtonEvent | BondEvent | DeviceEvent;
+type DashLinkEvent = StartEvent | RideEvent | TimerEvent | RefusedEvent | StopEvent | OpenedEvent | ClosedEvent | RecvEvent | FrameEvent | TapEvent | DisplayEvent | ButtonEvent | BondEvent | DeviceEvent | BleEvent;
 type Permission = "ride" | "guidance" | "position" | "voice" | "report" | "group" | "hazards" | "weather" | "stops" | "terrain" | "trip" | "media" | "contest" | "bikeData";
 
 // ---- actions renvoyées -------------------------------------------------------------------------
@@ -92,6 +99,10 @@ type DashLinkAction =
   | { type: "open"; channel: string; kind: "tcp"; host: string; port: number }
   | { type: "open"; channel: string; kind: "rfcomm"; uuid: string; secure?: boolean; server?: boolean }
   | { type: "open"; channel: string; kind: "rfcomm"; rfcommChannel: number; secure?: boolean }
+  | { type: "open"; channel: string; kind: "ble"; mtu?: number; priority?: "low" | "balanced" | "high" }
+  | { type: "bleRead"; channel: string; service: string; characteristic: string }
+  | { type: "bleWrite"; channel: string; service: string; characteristic: string; data: Uint8Array; response?: boolean }
+  | { type: "bleNotify"; channel: string; service: string; characteristic: string; on?: boolean }
   | { type: "pair" }
   | { type: "inspect"; sdp?: boolean }
   | { type: "send"; channel: string; data: Uint8Array; host?: string; port?: number }   // host et port : UDP seulement
@@ -118,4 +129,29 @@ interface DashLinkModule { onEvent(events: DashLinkEvent[]): DashLinkAction[] | 
 
 declare var dashlinkModule: DashLinkModule;
 /** Seule fonction offerte par DashLink : de l'aléa sûr (512 octets par lot au plus). */
-declare const DashLink: { random(n: number): Uint8Array };
+declare const DashLink: {
+  /** Aléa sûr du téléphone, 512 octets par lot au plus. */
+  random(n: number): Uint8Array;
+  /** Cryptographie calculée dans le bac à sable (synchrone). */
+  crypto: {
+    sha1(data: Uint8Array): Uint8Array; sha256(data: Uint8Array): Uint8Array;
+    hmacSha1(key: Uint8Array, data: Uint8Array): Uint8Array; hmacSha256(key: Uint8Array, data: Uint8Array): Uint8Array;
+    /** Sans bourrage : longueur multiple de 16. */
+    aesEcbEncrypt(key: Uint8Array, data: Uint8Array): Uint8Array; aesEcbDecrypt(key: Uint8Array, data: Uint8Array): Uint8Array;
+    /** Bourrage PKCS#7 par défaut (padding = false : multiple de 16). */
+    aesCbcEncrypt(key: Uint8Array, iv: Uint8Array, data: Uint8Array, padding?: boolean): Uint8Array;
+    aesCbcDecrypt(key: Uint8Array, iv: Uint8Array, data: Uint8Array, padding?: boolean): Uint8Array;
+    /** Compteur de 16 octets, incrémenté en gros-boutiste ; chiffre et déchiffre. */
+    aesCtr(key: Uint8Array, iv: Uint8Array, data: Uint8Array): Uint8Array;
+    /** iv de 12 octets ; renvoie chiffré + étiquette de 16 octets. Le déchiffrement lève une erreur si l'étiquette est fausse. */
+    aesGcmEncrypt(key: Uint8Array, iv: Uint8Array, data: Uint8Array, aad?: Uint8Array): Uint8Array;
+    aesGcmDecrypt(key: Uint8Array, iv: Uint8Array, data: Uint8Array, aad?: Uint8Array): Uint8Array;
+    ecdhP256: {
+      /** Clé publique non compressée : 65 octets (04 x y). */
+      generate(): { privateKey: Uint8Array; publicKey: Uint8Array };
+      publicKey(privateKey: Uint8Array): Uint8Array;
+      /** Secret partagé : x du point commun, 32 octets. */
+      derive(privateKey: Uint8Array, peerPublicKey: Uint8Array): Uint8Array;
+    };
+  };
+};
