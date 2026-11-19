@@ -11,6 +11,9 @@ Un module, c'est un dossier de quelques fichiers (`manifest.json`, du JavaScript
 cockpit). Il tourne dans un **bac à sable** : pas d'internet, pas d'accès au téléphone, seulement ce que le
 motard accepte. Tu n'as besoin que de **Node 18 ou plus** pour les outils du kit.
 
+Présentation : https://dashlink.quentin-sixt.workers.dev/developpeurs/ · catalogue publié :
+https://dashlink.quentin-sixt.workers.dev/modules
+
 ```
 kit/
   README.md              ce guide
@@ -120,7 +123,7 @@ node tools/dashlink.mjs check ../mon-module      # ce que le motard verra avant 
 node tools/dashlink.mjs pack ../mon-module       # → org.toi.mon-module-1.0.0.dlx
 curl -X POST --data-binary @org.toi.mon-module-1.0.0.dlx \
   -H "X-Module-Key: <un secret à toi, 16 caractères ou plus>" -H "X-Contact: <ton adresse>" \
-  https://<serveur DashLink>/modules/submissions
+  https://dashlink.quentin-sixt.workers.dev/modules/submissions
 ```
 
 Tu reçois un numéro de dépôt ; `GET /modules/submissions/<numéro>` donne l'état (`pending`, `approved`,
