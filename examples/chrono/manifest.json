@@ -1,0 +1,4 @@
+{"api":1,"id":"dev.dashlink.chrono","name":"Chrono","version":"1.0.0","author":"DashLink",
+ "description":"Chrono de balade : départ, tours, vitesse max et moyenne, annonces vocales. Exemple de cockpit en module.",
+ "permissions":["ride","voice"],
+ "cockpit":{"main":"index.html","script":"chrono.js"}}

@@ -1,0 +1,14 @@
+{
+  "name": "dashlink-kit",
+  "version": "1.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "Kit des développeurs de modules DashLink : écrans de moto et cockpits.",
+  "type": "module",
+  "bin": { "dashlink": "tools/dashlink.mjs" },
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "exemple": "node tools/dashlink.mjs replay examples/tripper examples/tripper/capture-exemple.txt",
+    "apercu": "node tools/dashlink.mjs cockpit examples/chrono"
+  }
+}

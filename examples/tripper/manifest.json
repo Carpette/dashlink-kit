@@ -1,0 +1,14 @@
+{
+  "api": 1,
+  "id": "dev.dashlink.tripper",
+  "name": "Tripper Dash",
+  "version": "1.0.0",
+  "author": "DashLink",
+  "description": "Écran Tripper Dash (Royal Enfield) : Wi-Fi de l'écran, poignée de main RSA, vidéo H.264 en RTP. Module de référence, écrit avec la seule API publique.",
+  "permissions": ["ride"],
+  "screen": {
+    "main": "moto.js",
+    "wifi": { "udp": [2000, 2002, 5000] },
+    "frames": { "maxWidth": 526, "maxHeight": 300, "maxFps": 4, "formats": ["h264"] }
+  }
+}

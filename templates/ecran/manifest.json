@@ -1,0 +1,14 @@
+{
+  "api": 1,
+  "id": "org.exemple.mon-ecran",
+  "name": "Mon écran de moto",
+  "version": "0.1.0",
+  "author": "Ton nom",
+  "description": "Pilote de l'écran de la moto X (protocole Wi-Fi UDP).",
+  "permissions": ["ride", "guidance"],
+  "screen": {
+    "main": "moto.js",
+    "wifi": { "udp": [5000] },
+    "frames": { "maxWidth": 480, "maxHeight": 272, "maxFps": 10, "formats": ["h264"] }
+  }
+}

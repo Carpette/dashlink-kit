@@ -1,0 +1,10 @@
+{
+  "api": 1,
+  "id": "org.exemple.mon-cockpit",
+  "name": "Mon cockpit",
+  "version": "0.1.0",
+  "author": "Ton nom",
+  "description": "Une phrase : ce que ton cockpit apporte au motard.",
+  "permissions": ["ride"],
+  "cockpit": { "main": "index.html", "script": "logique.js" }
+}
