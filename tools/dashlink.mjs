@@ -9,6 +9,8 @@
  *                                                           aperçu de ton cockpit (téléphone et écran de la moto)
  *   node tools/dashlink.mjs diff    <capture1> <capture2> [--depuis <hex>] [--paquets 40]
  *                                                           compare la même session prise sur deux téléphones
+ *   node tools/dashlink.mjs import  <btsnoop|pcap> <capture.txt> [--ecran <ip>]
+ *                                                           journal Bluetooth ou capture réseau → capture DashLink
  *
  * Le module tourne ici dans un contexte JavaScript vierge (ni réseau, ni minuteries, ni fichiers), avec les
  * mêmes événements, les mêmes actions et les mêmes règles que dans l'appli. L'appli reste la référence :
@@ -411,6 +413,132 @@ function parseCapture(text) {
   return { meta, packets, journal };
 }
 
+// ---- import : journal Bluetooth (btsnoop) ou capture réseau (pcap, pcapng) → capture DashLink ----------------
+
+/**
+ * Journal HCI Bluetooth d'Android (btsnoop, H4) : RFCOMM (liaison « rfcomm-<canal> ») et BLE ATT (liaison
+ * « att-<handle> » : écritures, notifications, lectures). Le téléphone envoie (>), l'écran répond (<).
+ */
+function fromBtsnoop(b) {
+  if (b.subarray(0, 8).toString("latin1") !== "btsnoop\0") fail("pas un journal btsnoop");
+  if (b.readUInt32BE(12) !== 1002) fail(`journal btsnoop de type ${b.readUInt32BE(12)} : seul le type 1002 (HCI H4, celui d'Android) est lu`);
+  const out = [], frag = new Map(), psm = new Map(), pending = new Map();
+  let t0 = null;
+  for (let p = 16; p + 24 <= b.length;) {
+    const incl = b.readUInt32BE(p + 4), flags = b.readUInt32BE(p + 8), ts = b.readBigUInt64BE(p + 16);
+    const d = b.subarray(p + 24, p + 24 + incl); p += 24 + incl;
+    if (d[0] !== 0x02 || d.length < 5) continue; // ACL seulement
+    const t = Number(ts / 1000n); t0 ??= t;
+    const incoming = (flags & 1) === 1;
+    const hf = d.readUInt16LE(1), handle = hf & 0xfff, pb = (hf >> 12) & 3, acl = d.subarray(5);
+    const key = `${handle}${incoming}`;
+    let l2 = pb === 1 ? Buffer.concat([frag.get(key) ?? Buffer.alloc(0), acl]) : acl;
+    if (l2.length < 4 || l2.length < 4 + l2.readUInt16LE(0)) { frag.set(key, l2); continue; }
+    frag.delete(key);
+    const cid = l2.readUInt16LE(2), pl = l2.subarray(4, 4 + l2.readUInt16LE(0));
+    if (cid === 1) { // signalisation : quelle liaison L2CAP porte RFCOMM (PSM 3)
+      for (let q = 0; q + 4 <= pl.length;) {
+        const code = pl[q], id = pl[q + 1], len = pl.readUInt16LE(q + 2), c = pl.subarray(q + 4, q + 4 + len); q += 4 + len;
+        if (code === 2 && c.length >= 4) pending.set(`${handle}:${id}`, { psm: c.readUInt16LE(0), scid: c.readUInt16LE(2), fromPhone: !incoming });
+        if (code === 3 && c.length >= 8 && c.readUInt16LE(4) === 0) {
+          const r = pending.get(`${handle}:${id}`); if (!r) continue;
+          const dcid = c.readUInt16LE(0);
+          // CID côté téléphone et côté écran : chacun marque la même liaison.
+          psm.set(`${handle}:${r.scid}`, r.psm); psm.set(`${handle}:${dcid}`, r.psm);
+        }
+      }
+      continue;
+    }
+    if (cid === 4) { // ATT (BLE)
+      const op = pl[0];
+      if ([0x12, 0x52, 0x1b, 0x1d].includes(op) && pl.length >= 3) out.push({ t: t - t0, incoming, channel: `att-${pl.readUInt16LE(1).toString(16).padStart(4, "0")}`, data: pl.subarray(3) });
+      else if (op === 0x0b && pl.length > 1) out.push({ t: t - t0, incoming, channel: "att-lecture", data: pl.subarray(1) });
+      continue;
+    }
+    if (psm.get(`${handle}:${cid}`) === 3 && pl.length >= 4) { // RFCOMM : trames UIH porteuses de données
+      const dlci = pl[0] >> 2, ctrl = pl[1] & 0xef;
+      if (dlci === 0 || ctrl !== 0xef) continue;
+      let len = pl[2] >> 1, q = 3;
+      if (!(pl[2] & 1)) { len = (pl[2] >> 1) | (pl[3] << 7); q = 4; }
+      if (pl[1] & 0x10) q++; // crédit (contrôle de flux)
+      if (len) out.push({ t: t - t0, incoming, channel: `rfcomm-${dlci >> 1}`, data: pl.subarray(q, q + len) });
+    }
+  }
+  return out;
+}
+
+/** Capture réseau (pcap ou pcapng, Ethernet, Linux « cooked » ou IP brute) : UDP et TCP avec l'écran. */
+function fromPcap(b, screen) {
+  const frames = [];
+  const magic = b.readUInt32LE(0);
+  if (magic === 0x0a0d0d0a) { // pcapng
+    const le = b.readUInt32LE(8) === 0x1a2b3c4d;
+    const u32 = (o) => (le ? b.readUInt32LE(o) : b.readUInt32BE(o)), u16 = (o) => (le ? b.readUInt16LE(o) : b.readUInt16BE(o));
+    const links = [];
+    for (let p = 0; p + 12 <= b.length;) {
+      const type = u32(p), len = u32(p + 4);
+      if (len < 12) break;
+      if (type === 1) links.push(u16(p + 8));
+      else if (type === 6) { const ifc = u32(p + 8), ts = (BigInt(u32(p + 12)) << 32n) | BigInt(u32(p + 16)), cap = u32(p + 20); frames.push({ link: links[ifc] ?? 1, t: Number(ts / 1000n), d: b.subarray(p + 28, p + 28 + cap) }); }
+      else if (type === 3) frames.push({ link: links[0] ?? 1, t: 0, d: b.subarray(p + 12, p + 12 + Math.min(u32(p + 8), len - 16)) });
+      p += len;
+    }
+  } else {
+    const le = magic === 0xa1b2c3d4 || magic === 0xa1b23c4d;
+    if (!le && b.readUInt32BE(0) !== 0xa1b2c3d4 && b.readUInt32BE(0) !== 0xa1b23c4d) fail("pas une capture pcap ou pcapng");
+    const ns = (le ? magic : b.readUInt32BE(0)) === 0xa1b23c4d;
+    const u32 = (o) => (le ? b.readUInt32LE(o) : b.readUInt32BE(o));
+    const link = u32(20);
+    for (let p = 24; p + 16 <= b.length;) {
+      const cap = u32(p + 8);
+      frames.push({ link, t: u32(p) * 1000 + Math.floor(u32(p + 4) / (ns ? 1e6 : 1e3)), d: b.subarray(p + 16, p + 16 + cap) });
+      p += 16 + cap;
+    }
+  }
+  const ips = [];
+  for (const f of frames) {
+    let o = { 1: 14, 113: 16, 276: 20, 101: 0, 228: 0 }[f.link];
+    if (o === undefined) continue;
+    if (f.link === 1 && f.d.readUInt16BE(12) === 0x8100) o += 4; // VLAN
+    const ip = f.d.subarray(o);
+    if (ip.length < 20 || ip[0] >> 4 !== 4) continue;
+    const ihl = (ip[0] & 15) * 4, proto = ip[9], src = [...ip.subarray(12, 16)].join("."), dst = [...ip.subarray(16, 20)].join(".");
+    const tl = Math.min(ip.readUInt16BE(2), ip.length), l4 = ip.subarray(ihl, tl);
+    let sp, dp, pl;
+    if (proto === 17 && l4.length >= 8) { sp = l4.readUInt16BE(0); dp = l4.readUInt16BE(2); pl = l4.subarray(8); }
+    else if (proto === 6 && l4.length >= 20) { sp = l4.readUInt16BE(0); dp = l4.readUInt16BE(2); pl = l4.subarray((l4[12] >> 4) * 4); }
+    else continue;
+    if (!pl.length) continue;
+    ips.push({ t: f.t, src, dst, sp, dp, udp: proto === 17, pl });
+  }
+  // L'écran : celui qu'on désigne, sinon la passerelle habituelle (adresse en .1), sinon le plus bavard.
+  if (!screen) {
+    const n = new Map(); for (const x of ips) for (const a of [x.src, x.dst]) n.set(a, (n.get(a) ?? 0) + 1);
+    screen = [...n.keys()].find((a) => a.endsWith(".1")) ?? [...n.entries()].sort((a, b2) => b2[1] - a[1])[0]?.[0];
+  }
+  const t0 = ips[0]?.t ?? 0;
+  return { screen, packets: ips.filter((x) => x.src === screen || x.dst === screen).map((x) => {
+    const incoming = x.src === screen, port = incoming ? x.sp : x.dp;
+    return { t: x.t - t0, incoming, channel: `${x.udp ? "udp" : "tcp"}-${port}`, data: x.pl };
+  }) };
+}
+
+function importCapture(file, outFile, opts) {
+  const b = fs.readFileSync(file);
+  const bt = b.subarray(0, 8).toString("latin1") === "btsnoop\0";
+  const r = bt ? { packets: fromBtsnoop(b) } : fromPcap(b, opts.screen);
+  if (!r.packets.length) fail(bt ? "aucun échange RFCOMM ni BLE dans ce journal" : `aucun échange UDP ou TCP avec ${r.screen ?? "l'écran"} (--ecran <ip> pour le désigner)`);
+  const lines = [`# source: ${path.basename(file)} (${bt ? "journal Bluetooth HCI" : "capture réseau"}, importé par dashlink.mjs)`];
+  if (r.screen) lines.push(`# écran: ${r.screen}`);
+  for (const p of r.packets) lines.push(`${p.t}\t${p.incoming ? "<" : ">"}\t${p.channel}\t${p.data.toString("hex")}`);
+  fs.writeFileSync(outFile, lines.join("\n") + "\n");
+  const per = {}; for (const p of r.packets) per[`${p.incoming ? "<" : ">"} ${p.channel}`] = (per[`${p.incoming ? "<" : ">"} ${p.channel}`] ?? 0) + 1;
+  console.log(`✓ ${outFile} : ${r.packets.length} paquets${r.screen ? ` avec l'écran ${r.screen}` : ""}`);
+  for (const [k, n] of Object.entries(per).sort()) console.log(`  ${k.padEnd(16)} ${n}`);
+  console.log("Les noms des liaisons viennent de la capture : renomme-les (colonne 3) comme ton module les ouvre, puis replay.");
+  return 0;
+}
+
 // ---- comparaison de deux captures ----------------------------------------------------------------
 
 const median = (a) => { if (!a.length) return NaN; const b = [...a].sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
@@ -682,7 +810,7 @@ button{margin:8px 6px 0 0;padding:6px 10px;border-radius:8px;border:1px solid #4
 // ---- ligne de commande -----------------------------------------------------------------------
 
 const [cmd, dir, ...rest] = process.argv.slice(2);
-const usage = () => { console.log(fs.readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(2, 15).map((l) => l.replace(/^ \* ?/, "")).join("\n")); process.exit(2); };
+const usage = () => { console.log(fs.readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(2, 17).map((l) => l.replace(/^ \* ?/, "")).join("\n")); process.exit(2); };
 if (!cmd || !dir) usage();
 try {
   if (cmd === "check") {
@@ -701,6 +829,10 @@ try {
   } else if (cmd === "replay") {
     if (!rest[0]) usage();
     process.exitCode = replay(dir, rest[0], { quiet: rest.includes("--quiet"), full: rest.includes("--full") });
+  } else if (cmd === "import") {
+    if (!rest[0]) usage();
+    const i = rest.indexOf("--ecran");
+    process.exitCode = importCapture(dir, rest[0], { screen: i >= 0 ? rest[i + 1] : null });
   } else if (cmd === "diff") {
     if (!rest[0]) usage();
     const opt = (k, d) => { const i = rest.indexOf(k); return i >= 0 ? rest[i + 1] : d; };

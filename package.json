@@ -9,6 +9,7 @@
   "engines": { "node": ">=18" },
   "scripts": {
     "exemple": "node tools/dashlink.mjs replay examples/tripper examples/tripper/capture-exemple.txt",
-    "apercu": "node tools/dashlink.mjs cockpit examples/chrono"
+    "apercu": "node tools/dashlink.mjs cockpit examples/chrono",
+    "test": "node --test tools/dashlink.test.mjs"
   }
 }

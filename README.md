@@ -18,8 +18,10 @@ https://dashlink.quentin-sixt.workers.dev/modules
 kit/
   README.md              ce guide
   API.md                 la référence : événements, actions, manifeste, limites
+  DECOUVRIR.md           trouver le protocole de ton écran : journal Bluetooth, capture Wi-Fi, import
   types/dashlink.d.ts    types pour ton éditeur (facultatif)
-  tools/dashlink.mjs     l'outil : vérifier, rejouer, prévisualiser, empaqueter
+  tools/dashlink.mjs     l'outil : vérifier, rejouer, prévisualiser, empaqueter, importer, comparer
+  lib/                   fonctions à copier : CRC, TLV, H.264 et RTP
   templates/cockpit/     modèle de cockpit
   templates/ecran/       modèle de pilote d'écran
   examples/chrono/       un vrai cockpit (livré avec DashLink)
@@ -100,6 +102,10 @@ cp -r templates/ecran ../mon-ecran
    `Math.random` sûr ; pour RSA, `BigInt` suffit (voir `examples/tripper/moto.js`).
 
 Pour avancer sans rouler, travaille avec des **captures** (section 4) et `replay`.
+
+**Tu pars de zéro ?** [DECOUVRIR.md](DECOUVRIR.md) explique comment observer l'appli officielle de ta marque
+(journal Bluetooth d'Android, capture Wi-Fi). Ensuite, `node tools/dashlink.mjs import` en fait une capture que
+ton module rejoue.
 
 **Marche sur un téléphone et pas sur l'autre ?** Prends la même session sur les deux (Atelier › Exporter la
 capture) : le journal de la liaison et l'état du téléphone y sont. Ensuite,
