@@ -164,6 +164,15 @@ faire, et l'acceptent ou non.
   clé et un numéro plus grand.
 - Une nouvelle version qui demande **une nouvelle permission** devra être acceptée à nouveau par chaque motard.
 - Un module peut être **retiré** du catalogue (faille, abus) : il est alors désinstallé des téléphones.
+- Les ids `dev.dashlink.*` et les noms ou auteurs avec « DashLink » ou « officiel » sont réservés.
+
+### Expérimental, puis validé
+
+Un pilote d'écran publié est d'abord **expérimental** : le motard en est prévenu avant de l'installer. Après un
+trajet, il dit dans l'appli si ça marche sur sa moto. Il envoie la marque, le modèle, l'année et la version de
+l'écran, rien d'autre. Avec au moins 3 « ça marche », et 3 fois plus que de « ça ne marche pas », ton pilote est
+**validé pour ce modèle**. La page des développeurs publie la liste des motos et leurs avis (`GET /modules/compat`) :
+regarde les « ça ne marche pas » et leur version d'écran, c'est souvent là que se cache ta prochaine correction.
 
 ### Ce qui est relu
 
