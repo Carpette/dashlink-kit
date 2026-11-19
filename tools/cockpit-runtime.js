@@ -4,6 +4,7 @@
  * SVG), attributs sans gestionnaire d'événement ni adresse ; `src` seulement sur `img` vers un fichier du
  * paquet ou une image `data:` ; `<link>` seulement pour une feuille de style du paquet. Le parseur d'un
  * `template` est inerte : rien ne se charge avant le filtre. Les appuis sur [data-tap] remontent à la logique.
+ * Sur l'écran de la moto, la position de la zone [data-dl="carte"] est remontée : DashLink y dessine le guidage.
  * Copie identique dans le kit (kit/tools/cockpit-runtime.js), vérifiée par les tests de l'appli.
  */
 (()=>{
@@ -24,12 +25,19 @@ function clean(node){
 }
 const app=document.getElementById('dl-app');
 const byId=id=>{const e=document.getElementById(id);return e&&app.contains(e)?e:null};
+let zone='';
+const mapZone=()=>{const e=app.querySelector('[data-dl="carte"]'),r=e?e.getBoundingClientRect():null,
+  v=r&&r.width>0&&r.height>0?[r.left,r.top,r.width,r.height].map(Math.round):[0,0,0,0],k=v.join();
+  if(k!==zone){zone=k;DashLinkUi.map(v[0],v[1],v[2],v[3])}};
+const later=()=>requestAnimationFrame(mapZone);
+addEventListener('resize',later);
 window.__dlui={apply(o){
   if(o.op==='html'){const t=document.createElement('template');t.innerHTML=o.html;app.replaceChildren(clean(t.content))}
   else{const e=byId(o.id);if(!e)return;
     if(o.op==='text')e.textContent=o.text;
     else if(o.op==='class')e.classList.toggle(o.name,o.on);
     else if(o.op==='style')e.style.setProperty(o.prop,o.value)}
+  later();
 }};
 document.addEventListener('click',ev=>{const t=ev.target&&ev.target.closest?ev.target.closest('[data-tap]'):null;if(t&&app.contains(t))DashLinkUi.tap(String(t.getAttribute('data-tap')).slice(0,64))},true);
 })()

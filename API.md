@@ -19,7 +19,7 @@ Types exacts : [types/dashlink.d.ts](types/dashlink.d.ts). Guide pas à pas : [R
     "bluetooth": { "rfcomm": ["00001101-0000-1000-8000-00805f9b34fb"] },
     "frames": { "maxWidth": 800, "maxHeight": 480, "maxFps": 10, "formats": ["h264"] }
   },
-  "cockpit": { "main": "index.html", "script": "logique.js" }
+  "cockpit": { "main": "index.html", "script": "logique.js", "bike": "moto.html" }
 }
 ```
 
@@ -30,7 +30,7 @@ Types exacts : [types/dashlink.d.ts](types/dashlink.d.ts). Guide pas à pas : [R
 | `name`, `author` | 40 et 60 caractères au plus |
 | `screen` | Pilote d'écran : script `main`, et au moins une liaison déclarée (8 ports au plus par type) |
 | `screen.frames` | Images du guidage : 16 à 1920 pixels de côté, 1 à 30 images/s, formats `h264`, `rgba`, `jpeg` |
-| `cockpit` | Cockpit : `main` (HTML, sans script), `script` (logique, facultatif) |
+| `cockpit` | Cockpit : `main` (HTML du téléphone, sans script), `script` (logique, facultatif), `bike` (HTML pour l'écran de la moto, facultatif) |
 
 Un module peut déclarer `screen`, `cockpit`, ou les deux (deux scripts séparés, qui ne se parlent pas).
 
@@ -75,7 +75,9 @@ Disponible : JavaScript standard (`Math`, `JSON`, `Date`, `BigInt`, `TextEncoder
 | `closed` | `channel`, `error?` | Liaison perdue |
 | `recv` | `channel`, `data`, `host?`, `port?` | Données reçues de l'écran |
 | `frame` | `format`, `width`, `height`, `key`, `pts` (µs), `data` | Image du guidage (après `frames`). Seule la plus récente attend : tu ne prends jamais de retard |
-| `tap` | `id` | Appui sur un élément `data-tap="id"` (cockpit) |
+| `tap` | `id` | Appui sur un élément `data-tap="id"` (cockpit, téléphone seulement) |
+| `display` | `phone`, `bike` | Affichages ouverts du cockpit : `phone` (vrai ou faux), `bike` (`{width, height}` ou `null`). Envoyé à chaque changement |
+| `button` | `command` | Bouton du guidon (joystick de la moto), mêmes noms que l'action `joystick` (cockpit) |
 
 ### `ride`
 
@@ -122,6 +124,7 @@ Disponible : JavaScript standard (`Math`, `JSON`, `Date`, `BigInt`, `TextEncoder
 | `{type:'ui', op:'class', id, name, on}` | Ajoute ou retire une classe | |
 | `{type:'ui', op:'style', id, prop, value}` | Une propriété CSS | |
 | `{type:'ui', op:'html', html}` | Remplace tout l'affichage (filtré) | 64 000 caractères |
+| `display: 'phone'` ou `'bike'` | Ajouté à une action `ui` : ne vise qu'un affichage. Sans lui, les deux | |
 | `{type:'vibrate', ms}` | Vibration | 10 à 1 000 ms |
 | `{type:'report', hazard}` | Danger à la position actuelle, partagé avec les autres motards | `report` ; `DANGER`, `GRAVEL`, `ROADWORKS`, `CLOSED` ; un toutes les 10 s |
 
@@ -134,6 +137,23 @@ HTML et CSS ordinaires, filtrés par DashLink : texte, titres, listes, tableaux,
 `ellipse`, `text`, dégradés). Retirés : `script`, attributs `on…`, `a`, `form`, `iframe`, `object`, `meta`,
 `link` (sauf une feuille de style du paquet), et toute adresse extérieure. Images : fichiers du paquet
 (`<img src="logo.png">`) ou `data:image/…`. Polices : fichiers du paquet (`@font-face`).
+
+## Cockpit sur l'écran de la moto
+
+Avec `cockpit.bike`, le motard peut choisir ton cockpit pour l'écran de sa moto (Réglages › En roulant › Écrans du cockpit),
+sur toute moto dont l'écran affiche une image (pilote d'écran qui demande des `frames`).
+
+- **Une seule logique, deux affichages.** Les mêmes actions `ui` mettent à jour le téléphone et la moto (les
+  id absents d'une page sont ignorés). `display` dans une action vise un seul des deux.
+- **Taille :** celle des images demandées par le pilote de la moto (526 × 300 pour le Tripper). L'événement
+  `display` te la donne ; ta page se met en page en CSS (`vw`, `vh`, flex). 1 pixel CSS = 1 pixel de l'écran.
+- **La carte :** un élément `data-dl="carte"` réserve une zone où DashLink dessine son guidage (carte, flèche,
+  distance), proportions gardées. Tu ne reçois jamais la carte elle-même.
+- **Pas tactile :** l'écran de la moto ne reçoit pas d'appui. Les boutons du guidon arrivent en événements
+  `button`, et le motard peut toujours agir depuis le téléphone.
+- Mêmes règles que sur le téléphone : HTML filtré, aucun script, aucune adresse extérieure.
+
+Aperçu : `node tools/dashlink.mjs cockpit <dossier> --taille 526x300` montre le téléphone et la moto côte à côte.
 
 ## Paquet
 

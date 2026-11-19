@@ -1,0 +1,23 @@
+<!--
+  Affichage du Chrono sur l'écran de la moto (cockpit.bike). Même logique que sur le téléphone (chrono.js) :
+  les mêmes id sont mis à jour sur les deux affichages. L'écran de la moto n'est pas tactile : on démarre et on
+  arrête le chrono depuis le téléphone. La zone data-dl="carte" reçoit le guidage dessiné par DashLink.
+-->
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  #m { height: 100%; display: flex; background: #000; color: #fff; font-family: system-ui, sans-serif; }
+  #g { width: 42%; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2vh; border-right: 2px solid #1f2328; }
+  #time { font-size: 15vw; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; color: #ffd400; }
+  #info { display: flex; gap: 5vw; font-size: 3.4vw; color: #9aa4ae; text-align: center; }
+  #info b { display: block; color: #fff; font-size: 6.5vw; font-variant-numeric: tabular-nums; }
+  #laps { font-size: 3.4vw; color: #9aa4ae; min-height: 1.3em; }
+  #carte { flex: 1; }
+</style>
+<div id="m">
+  <div id="g">
+    <div id="time">0:00</div>
+    <div id="info"><div>km/h<b id="speed">--</b></div><div>max<b id="vmax">--</b></div><div>moy.<b id="avg">--</b></div></div>
+    <div id="laps"></div>
+  </div>
+  <div id="carte" data-dl="carte"></div>
+</div>

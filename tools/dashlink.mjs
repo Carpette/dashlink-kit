@@ -5,7 +5,8 @@
  *   node tools/dashlink.mjs check   <dossier>                 vérifie le manifeste, les fichiers, la syntaxe
  *   node tools/dashlink.mjs pack    <dossier> [sortie.dlx]    fabrique le paquet à déposer au catalogue
  *   node tools/dashlink.mjs replay  <dossier> <capture.txt>   rejoue une capture face à ton pilote d'écran
- *   node tools/dashlink.mjs cockpit <dossier> [--port 8090]   aperçu de ton cockpit dans le navigateur
+ *   node tools/dashlink.mjs cockpit <dossier> [--port 8090] [--taille 526x300]
+ *                                                           aperçu de ton cockpit (téléphone et écran de la moto)
  *
  * Le module tourne ici dans un contexte JavaScript vierge (ni réseau, ni minuteries, ni fichiers), avec les
  * mêmes événements, les mêmes actions et les mêmes règles que dans l'appli. L'appli reste la référence :
@@ -95,7 +96,8 @@ function manifestOf(files) {
   if (o.cockpit) {
     file(o.cockpit.main, ".html", "cockpit.main");
     if (o.cockpit.script !== undefined) file(o.cockpit.script, ".js", "cockpit.script");
-    cockpit = { main: o.cockpit.main, script: o.cockpit.script ?? null };
+    if (o.cockpit.bike !== undefined) file(o.cockpit.bike, ".html", "cockpit.bike");
+    cockpit = { main: o.cockpit.main, script: o.cockpit.script ?? null, bike: o.cockpit.bike ?? null };
   }
   if (!screen && !cockpit) fail("le module doit déclarer « screen », « cockpit », ou les deux");
   return { ...o, permissions: [...new Set(perms)], screen, cockpit };
@@ -124,11 +126,11 @@ function check(dir) {
     try { new vm.Script(files.get(p).toString("utf8"), { filename: p }); } catch (e) { fail(`${p} : ${e.message}`); }
   }
   const warn = [];
-  if (m.cockpit) {
-    const html = files.get(m.cockpit.main).toString("utf8");
-    if (/<script/i.test(html)) warn.push(`${m.cockpit.main} contient <script> : il ne s'exécutera pas (la logique va dans cockpit.script)`);
-    if (/\son[a-z]+\s*=/i.test(html)) warn.push(`${m.cockpit.main} contient des attributs on… : ils ne s'exécuteront pas (utilise data-tap)`);
-    if (/(src|href)\s*=\s*["']?(https?:)?\/\//i.test(html)) warn.push(`${m.cockpit.main} vise une adresse externe : elle sera bloquée (tout doit être dans le paquet)`);
+  for (const page of [m.cockpit?.main, m.cockpit?.bike].filter(Boolean)) {
+    const html = files.get(page).toString("utf8");
+    if (/<script/i.test(html)) warn.push(`${page} contient <script> : il ne s'exécutera pas (la logique va dans cockpit.script)`);
+    if (/\son[a-z]+\s*=/i.test(html)) warn.push(`${page} contient des attributs on… : ils ne s'exécuteront pas (utilise data-tap)`);
+    if (/(src|href)\s*=\s*["']?(https?:)?\/\//i.test(html)) warn.push(`${page} vise une adresse externe : elle sera bloquée (tout doit être dans le paquet)`);
   }
   return { m, files, total, warn };
 }
@@ -295,6 +297,7 @@ class Broker {
         need(["html", "text", "class", "style"].includes(o.op), "« ui.op » : parmi html, text, class, style");
         const r = { op: o.op };
         if (o.op !== "html") r.id = this.name(o.id, "id");
+        if (o.display !== undefined) { need(o.display === "phone" || o.display === "bike", "« display » : phone ou bike"); r.display = o.display; }
         if (o.op === "html") { need(String(o.html ?? "").length <= L.html, `« html » : ${L.html} caractères au plus`); r.html = String(o.html ?? ""); }
         if (o.op === "text") r.text = String(o.text ?? "").slice(0, 2000);
         if (o.op === "class") { r.name = this.name(o.name, "name"); r.on = o.on !== false; }
@@ -411,15 +414,30 @@ function replay(dir, capFile, opts) {
 // ---- aperçu d'un cockpit --------------------------------------------------------------------
 
 const MIME = { css: "text/css", svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif", woff2: "font/woff2", woff: "font/woff", ttf: "font/ttf" };
-const CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'";
+const CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-src 'self'; object-src 'none'; form-action 'none'; base-uri 'none'";
+const BUTTONS = ["ZOOM_IN", "ZOOM_OUT", "RECENTER", "VOLUME_UP", "VOLUME_DOWN"];
 
-function cockpit(dir, port) {
+/**
+ * Aperçu : le téléphone et, si le cockpit le prévoit (`cockpit.bike`), l'écran de la moto, pilotés par la même
+ * logique, comme dans l'appli. Sur la moto, la zone data-dl="carte" montre un faux guidage à la place de celui
+ * que DashLink y dessinera.
+ */
+function cockpit(dir, port, bikeSize) {
   const { m } = check(dir);
   need(m.cockpit, "ce module n'a pas de cockpit (« cockpit »)");
   const granted = m.permissions.filter((p) => p !== "position");
-  const clients = new Set(), ops = [];
-  let box = null, broker = null, files = null, timers = new Map(), start = Date.now(), lastHtml = null;
-  const push = (op) => { if (op.op === "html") { lastHtml = op; ops.length = 0; } else ops.push(op); if (ops.length > 500) ops.shift(); for (const c of clients) c.write(`data: ${JSON.stringify(op)}\n\n`); };
+  const kinds = m.cockpit.bike ? ["phone", "bike"] : ["phone"];
+  const clients = { phone: new Set(), bike: new Set() }, history = { phone: [], bike: [] };
+  let box = null, broker = null, files = null, timers = new Map(), start = Date.now();
+  const push = (op) => {
+    for (const k of kinds) {
+      if (op.display && op.display !== k) continue;
+      const h = history[k];
+      if (op.op === "html") h.length = 0; else if (h.length > 500) h.splice(h[0]?.op === "html" ? 1 : 0, 1);
+      h.push(op);
+      for (const c of clients[k]) c.write(`data: ${JSON.stringify(op)}\n\n`);
+    }
+  };
   const say = (s) => console.log(new Date().toLocaleTimeString("fr-FR") + "  " + s);
   const run = (events) => {
     if (!box) return;
@@ -444,10 +462,12 @@ function cockpit(dir, port) {
       const c = check(dir);
       files = c.files; c.warn.forEach((w) => say("⚠ " + w));
       broker = new Broker(c.m, granted, { wifi: null, bluetooth: null });
-      push({ op: "html", html: files.get(c.m.cockpit.main).toString("utf8") });
+      push({ op: "html", html: files.get(c.m.cockpit.main).toString("utf8"), display: "phone" });
+      if (c.m.cockpit.bike) push({ op: "html", html: files.get(c.m.cockpit.bike).toString("utf8"), display: "bike" });
       box = c.m.cockpit.script ? new Sandbox(files.get(c.m.cockpit.script).toString("utf8"), c.m.cockpit.script, (l) => say("⚠ " + l)) : null;
-      say(`${c.m.name} ${c.m.version} chargé · permissions : ${granted.join(", ") || "aucune"}`);
-      run([{ type: "start", api: 1, permissions: granted }]);
+      say(`${c.m.name} ${c.m.version} chargé · permissions : ${granted.join(", ") || "aucune"}${c.m.cockpit.bike ? ` · écran de la moto ${bikeSize.w}×${bikeSize.h}` : ""}`);
+      run([{ type: "start", api: 1, permissions: granted },
+        { type: "display", phone: true, bike: c.m.cockpit.bike ? { width: bikeSize.w, height: bikeSize.h } : null }]);
     } catch (e) { box = null; say("✖ " + e.message); }
   };
   load();
@@ -463,26 +483,38 @@ function cockpit(dir, port) {
     run([ride]);
   }, 1000);
   const runtime = fs.readFileSync(path.join(HERE, "cockpit-runtime.js"), "utf8");
-  const shell = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>${m.name} — aperçu DashLink</title><style>html{background:#222}body{margin:0 auto;width:412px;height:820px;max-height:100vh;background:#000;color:#fff;-webkit-user-select:none;user-select:none}#dl-app{height:100%}</style>
-</head><body><div id="dl-app"></div><script src="/__dashlink/preview.js"></script><script src="/__dashlink/runtime.js"></script><script src="/__dashlink/live.js"></script></body></html>`;
-  const preview = "window.DashLinkUi={tap:function(id){fetch('/__dashlink/tap',{method:'POST',body:String(id)})}};";
-  const live = "new EventSource('/__dashlink/events').onmessage=function(e){__dlui.apply(JSON.parse(e.data))};";
+  const head = (title) => `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no"><title>${title}</title>`;
+  const outer = head(`${m.name} — aperçu DashLink`) + `<style>body{margin:0;background:#222;color:#c4cad0;font:14px system-ui,sans-serif;display:flex;flex-wrap:wrap;gap:24px;padding:20px;align-items:flex-start}
+figure{margin:0;width:min-content}figcaption{margin:0 0 6px}iframe{border:0;display:block;background:#000}#phone{width:412px;height:820px;max-height:calc(100vh - 80px);border-radius:24px}
+button{margin:8px 6px 0 0;padding:6px 10px;border-radius:8px;border:1px solid #444;background:#2c3238;color:#fff;cursor:pointer}</style></head><body>
+<figure><figcaption>Téléphone (appuis sur data-tap)</figcaption><iframe id="phone" src="/phone"></iframe></figure>` +
+    (m.cockpit.bike ? `<figure><figcaption>Écran de la moto, ${bikeSize.w}×${bikeSize.h} (zone hachurée : guidage de DashLink)</figcaption><iframe src="/bike" width="${bikeSize.w}" height="${bikeSize.h}"></iframe>
+<div>Boutons du guidon : ${BUTTONS.map((b) => `<button data-b="${b}">${b}</button>`).join("")}</div></figure>` : "") +
+    `<script src="/__dashlink/outer.js"></script></body></html>`;
+  const shell = (k) => head(k) + `<style>html,body{margin:0;height:100%;background:#000;color:#fff;-webkit-user-select:none;user-select:none;overflow:hidden}#dl-app{height:100%}
+#dl-carte{position:fixed;display:none;box-sizing:border-box;border:2px dashed #ffd400;background:repeating-linear-gradient(45deg,#1b2128 0 10px,#11151a 10px 20px);color:#ffd400;font:700 16px system-ui,sans-serif;align-items:center;justify-content:center;text-align:center;pointer-events:none}</style>
+</head><body><div id="dl-app"></div><div id="dl-carte">↱ 300 m<br>guidage DashLink</div><script src="/__dashlink/preview-${k}.js"></script><script src="/__dashlink/runtime.js"></script><script src="/__dashlink/live-${k}.js"></script></body></html>`;
+  const preview = (k) => `window.DashLinkUi={tap:function(id){${k === "phone" ? "fetch('/__dashlink/tap',{method:'POST',body:String(id)})" : ""}},` +
+    `map:function(x,y,w,h){var c=document.getElementById('dl-carte');c.style.display=w>0?'flex':'none';c.style.left=x+'px';c.style.top=y+'px';c.style.width=w+'px';c.style.height=h+'px'}};`;
+  const live = (k) => `new EventSource('/__dashlink/events-${k}').onmessage=function(e){__dlui.apply(JSON.parse(e.data))};`;
+  const outerJs = "document.querySelectorAll('[data-b]').forEach(function(b){b.onclick=function(){fetch('/__dashlink/button',{method:'POST',body:b.dataset.b})}});";
+  const js = (body) => ["text/javascript; charset=utf-8", body];
+  const STATIC = { "/": ["text/html; charset=utf-8", outer], "/__dashlink/runtime.js": js(runtime), "/__dashlink/outer.js": js(outerJs) };
+  for (const k of kinds) Object.assign(STATIC, { [`/${k}`]: ["text/html; charset=utf-8", shell(k)], [`/__dashlink/preview-${k}.js`]: js(preview(k)), [`/__dashlink/live-${k}.js`]: js(live(k)) });
+  const body = (req, then) => { let b = ""; req.on("data", (d) => { b += d; }); req.on("end", () => then(b.slice(0, 64))); };
   http.createServer((req, res) => {
     const u = new URL(req.url, "http://x"), p = decodeURIComponent(u.pathname);
-    const send = (code, type, body) => { res.writeHead(code, { "content-type": type, "content-security-policy": CSP, "cache-control": "no-store" }); res.end(body); };
-    if (p === "/") return send(200, "text/html; charset=utf-8", shell);
-    if (p === "/__dashlink/runtime.js") return send(200, "text/javascript; charset=utf-8", runtime);
-    if (p === "/__dashlink/preview.js") return send(200, "text/javascript; charset=utf-8", preview);
-    if (p === "/__dashlink/live.js") return send(200, "text/javascript; charset=utf-8", live);
-    if (p === "/__dashlink/events") {
+    const send = (code, type, b) => { res.writeHead(code, { "content-type": type, "content-security-policy": CSP, "cache-control": "no-store" }); res.end(b); };
+    if (STATIC[p]) return send(200, ...STATIC[p]);
+    if (p === "/favicon.ico") return send(404, "text/plain", "");
+    const ev = /^\/__dashlink\/events-(phone|bike)$/.exec(p);
+    if (ev && kinds.includes(ev[1])) {
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
-      for (const op of [lastHtml, ...ops].filter(Boolean)) res.write(`data: ${JSON.stringify(op)}\n\n`);
-      clients.add(res); req.on("close", () => clients.delete(res)); return;
+      for (const op of history[ev[1]]) res.write(`data: ${JSON.stringify(op)}\n\n`);
+      clients[ev[1]].add(res); req.on("close", () => clients[ev[1]].delete(res)); return;
     }
-    if (p === "/__dashlink/tap" && req.method === "POST") {
-      let b = ""; req.on("data", (d) => { b += d; }); req.on("end", () => { say(`appui ${b.slice(0, 64)}`); run([{ type: "tap", id: b.slice(0, 64) }]); send(204, "text/plain", ""); }); return;
-    }
+    if (p === "/__dashlink/tap" && req.method === "POST") return body(req, (b) => { say(`appui ${b}`); run([{ type: "tap", id: b }]); send(204, "text/plain", ""); });
+    if (p === "/__dashlink/button" && req.method === "POST") return body(req, (b) => { if (BUTTONS.includes(b)) { say(`bouton du guidon ${b}`); run([{ type: "button", command: b }]); } send(204, "text/plain", ""); });
     const f = p.slice(1), ext = f.split(".").pop().toLowerCase();
     // Comme sur le téléphone : seuls les fichiers d'affichage du paquet sont servis (jamais ses scripts).
     if (MIME[ext] && files?.has(f)) return send(200, MIME[ext], files.get(f));
@@ -494,13 +526,13 @@ function cockpit(dir, port) {
 // ---- ligne de commande -----------------------------------------------------------------------
 
 const [cmd, dir, ...rest] = process.argv.slice(2);
-const usage = () => { console.log(fs.readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(2, 12).map((l) => l.replace(/^ \* ?/, "")).join("\n")); process.exit(2); };
+const usage = () => { console.log(fs.readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(2, 13).map((l) => l.replace(/^ \* ?/, "")).join("\n")); process.exit(2); };
 if (!cmd || !dir) usage();
 try {
   if (cmd === "check") {
     const { m, files, total, warn } = check(dir);
     console.log(`✓ ${m.name} ${m.version} (${m.id}) de ${m.author} : ${files.size} fichiers, ${(total / 1024).toFixed(0)} Ko`);
-    console.log(`  ${[m.screen && "pilote d'écran", m.cockpit && "cockpit"].filter(Boolean).join(" + ")}`);
+    console.log(`  ${[m.screen && "pilote d'écran", m.cockpit && ("cockpit" + (m.cockpit.bike ? " (téléphone et écran de la moto)" : ""))].filter(Boolean).join(" + ")}`);
     console.log("  Ce que le motard verra avant d'installer :\n" + (consentLines(m).map((l) => "   • " + l).join("\n") || "   • Aucun accès à ses données"));
     for (const w of warn) console.log("  ⚠ " + w);
   } else if (cmd === "pack") {
@@ -514,8 +546,10 @@ try {
     if (!rest[0]) usage();
     process.exitCode = replay(dir, rest[0], { quiet: rest.includes("--quiet"), full: rest.includes("--full") });
   } else if (cmd === "cockpit") {
-    const i = rest.indexOf("--port");
-    cockpit(dir, i >= 0 ? Number(rest[i + 1]) : 8090);
+    const i = rest.indexOf("--port"), t = rest.indexOf("--taille");
+    const [w, h] = (t >= 0 ? rest[t + 1] : "526x300").split("x").map(Number);
+    if (!(w >= 16 && w <= 1920 && h >= 16 && h <= 1920)) fail("--taille : LARGEURxHAUTEUR, de 16 à 1920 (ex. 800x480)");
+    cockpit(dir, i >= 0 ? Number(rest[i + 1]) : 8090, { w, h });
   } else usage();
 } catch (e) {
   console.error("✖ " + (e instanceof Refused ? "refusé : " : "") + e.message);

@@ -73,6 +73,11 @@ Pour changer l'affichage : `ui` avec `text` (texte d'un élément), `class` (ajo
 `style` (une propriété CSS) ou `html` (tout remplacer). Pour le reste : `say` (voix dans le casque),
 `vibrate`, `timer` (minuteries), `report` (signaler un danger), `log`. Tout est dans [API.md](API.md).
 
+**Sur l'écran de la moto** : ajoute une page `moto.html` et `"bike": "moto.html"` dans le manifeste. Ton
+cockpit peut alors s'afficher sur l'écran de toute moto dont l'écran affiche une image, avec le guidage de
+DashLink dans la zone `data-dl="carte"`. L'aperçu le montre à côté du téléphone ; l'exemple
+`examples/chrono` le fait. Détails dans [API.md](API.md#cockpit-sur-lécran-de-la-moto).
+
 **Conseils** : on roule avec des gants, au soleil, avec des vibrations. De très gros boutons, un seul appui par
 action, des contrastes forts, la voix plutôt que du texte à lire.
 

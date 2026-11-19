@@ -36,8 +36,12 @@ interface RecvEvent { type: "recv"; channel: string; host?: string; port?: numbe
 interface FrameEvent { type: "frame"; format: "h264" | "rgba" | "jpeg"; width: number; height: number; key: boolean; pts: number; data: Uint8Array }
 // Cockpit
 interface TapEvent { type: "tap"; id: string }
+/** Affichages ouverts : téléphone, et écran de la moto avec sa taille. */
+interface DisplayEvent { type: "display"; phone: boolean; bike: { width: number; height: number } | null }
+/** Bouton du guidon. */
+interface ButtonEvent { type: "button"; command: JoystickCommand }
 
-type DashLinkEvent = StartEvent | RideEvent | TimerEvent | RefusedEvent | StopEvent | OpenedEvent | ClosedEvent | RecvEvent | FrameEvent | TapEvent;
+type DashLinkEvent = StartEvent | RideEvent | TimerEvent | RefusedEvent | StopEvent | OpenedEvent | ClosedEvent | RecvEvent | FrameEvent | TapEvent | DisplayEvent | ButtonEvent;
 type Permission = "ride" | "guidance" | "position" | "voice" | "report";
 
 // ---- actions renvoyées -------------------------------------------------------------------------
@@ -57,12 +61,15 @@ type DashLinkAction =
   | { type: "joystick"; command: JoystickCommand }
   | { type: "status"; connected: boolean; text: string }
   // cockpit
-  | { type: "ui"; op: "html"; html: string }
-  | { type: "ui"; op: "text"; id: string; text: string }
-  | { type: "ui"; op: "class"; id: string; name: string; on?: boolean }
-  | { type: "ui"; op: "style"; id: string; prop: string; value: string }
+  | { type: "ui"; op: "html"; html: string; display?: Display }
+  | { type: "ui"; op: "text"; id: string; text: string; display?: Display }
+  | { type: "ui"; op: "class"; id: string; name: string; on?: boolean; display?: Display }
+  | { type: "ui"; op: "style"; id: string; prop: string; value: string; display?: Display }
   | { type: "vibrate"; ms: number }
   | { type: "report"; hazard: "DANGER" | "GRAVEL" | "ROADWORKS" | "CLOSED" };    // permission « report »
+
+/** Affichage visé par une action « ui » (sans : les deux). */
+type Display = "phone" | "bike";
 
 type JoystickCommand = "VOLUME_UP" | "VOLUME_DOWN" | "MUTE" | "START_NAVIGATION" | "STOP_NAVIGATION" | "ZOOM_IN" | "ZOOM_OUT"
   | "RECENTER" | "ANSWER_CALL" | "START_MUSIC" | "NAVIGATION_NOTIFICATION" | "REMOVE_WAYPOINT" | "ROADSIDE_ASSISTANCE";
